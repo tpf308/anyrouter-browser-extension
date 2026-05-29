@@ -44,7 +44,30 @@
               spellcheck="false"
             />
           </label>
-          <p class="field-hint">用户 ID 与 Access Token 均可在 AnyRouter 控制台「个人设置」获取。</p>
+          <label class="field">
+            <span class="field-label">API 令牌（用于 AI 主动探测）</span>
+            <input
+              id="apiTokenInput"
+              name="apiToken"
+              type="password"
+              placeholder="控制台「API 令牌」，留空则关闭探测"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </label>
+          <label class="field">
+            <span class="field-label">刷新间隔（分钟，1–60，0关闭）</span>
+            <input
+              id="refreshMinutesInput"
+              name="refreshMinutes"
+              type="number"
+              min="0"
+              max="60"
+              step="1"
+              placeholder="10"
+              autocomplete="off"
+            />
+          </label>
           <div class="modal-actions">
             <button type="button" id="cancelKeyBtn" class="btn-ghost">取消</button>
             <button type="submit" class="btn-fill">保存</button>
@@ -83,6 +106,17 @@
 
       <!-- 数据视图 -->
       <section id="summaryView" hidden>
+        <!-- AI 健康状态卡片 -->
+        <div class="health" id="healthCard">
+          <div class="health-row">
+            <span class="health-pulse" id="healthPulse"></span>
+            <span class="health-label" id="healthLabel">未知</span>
+            <span class="health-gap" id="healthGap">-</span>
+          </div>
+          <p class="health-desc" id="healthDesc">尚未发起探测，等待下次刷新。</p>
+          <p class="health-meta">上次成功 <b id="healthLastTs">-</b></p>
+        </div>
+
         <div class="hero">
           <div class="hero-text">
             <p class="hero-label">实时可用额度</p>
@@ -91,29 +125,18 @@
           <span class="badge" id="badgePreview">0</span>
         </div>
 
-        <div class="progress-section">
-          <div class="track"><span class="fill" id="usageBar"></span></div>
-          <div class="track-meta">
-            <span>本周 <b id="weekPercent">0%</b></span>
-            <span id="updatedAt">未刷新</span>
-          </div>
-        </div>
-
         <div class="quads">
-          <div class="quad"><span>本周已用</span><b id="weekUsed">$0.00</b></div>
-          <div class="quad"><span>周限额度</span><b id="weekBudget">$0.00</b></div>
           <div class="quad"><span>今日消费</span><b id="todayUsed">$0.00</b></div>
+          <div class="quad"><span>历史消耗</span><b id="historyUsed">$0.00</b></div>
         </div>
 
         <div class="cells">
           <div class="cell"><span>今日调用</span><b id="todayCalls">0</b></div>
           <div class="cell"><span>今日 Token</span><b id="todayTokens">0</b></div>
-          <div class="cell"><span>日限额度</span><b id="dailyBudget">$0.00</b></div>
-          <div class="cell"><span>本周调用</span><b id="weekCalls">0</b></div>
           <div class="cell"><span>总请求次数</span><b id="totalRequests">0</b></div>
-          <div class="cell"><span>总使用额度</span><b id="totalUsed">$0.00</b></div>
           <div class="cell"><span>总使用 Token</span><b id="totalTokens">0</b></div>
           <div class="cell"><span>RPM</span><b id="rpm">0</b></div>
+          <div class="cell"><span>TPM</span><b id="tpm">0</b></div>
         </div>
       </section>
 

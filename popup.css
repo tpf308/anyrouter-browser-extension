@@ -125,12 +125,6 @@ body {
   letter-spacing: 0.02em;
 }
 
-.field-hint {
-  font-size: 10px;
-  color: var(--muted);
-  line-height: 1.5;
-}
-
 #configForm input {
   width: 100%;
   background: var(--surf2);
@@ -262,6 +256,89 @@ body {
 
 .alert[hidden] { display: none; }
 
+/* ── AI 健康卡片 ─────────────────────────────── */
+
+.health {
+  margin: 8px 11px 0;
+  padding: 9px 11px 10px;
+  border-radius: 9px;
+  background: var(--surf);
+  border: 1px solid var(--border);
+  display: grid;
+  gap: 4px;
+  --health-color: oklch(0.55 0.17 162.48);
+  transition: border-color 220ms, background 220ms;
+}
+
+.health[data-state="healthy"]    { --health-color: oklch(0.55 0.17 162.48); }
+.health[data-state="unhealthy"] {
+  --health-color: oklch(0.577 0.245 27.325);
+  border-color: color-mix(in oklch, var(--health-color) 45%, var(--border));
+  background: color-mix(in oklch, var(--health-color) 7%, var(--surf));
+}
+.health[data-state="disabled"],
+.health[data-state="no-token"],
+.health[data-state="unknown"] { --health-color: oklch(0.551 0.027 264.364); }
+
+.health-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.health-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--health-color);
+  flex-shrink: 0;
+  box-shadow: 0 0 0 0 color-mix(in oklch, var(--health-color) 60%, transparent);
+}
+
+.health[data-state="healthy"] .health-pulse,
+.health[data-state="unhealthy"] .health-pulse {
+  animation: health-pulse 1.6s ease-out infinite;
+}
+
+@keyframes health-pulse {
+  0%   { box-shadow: 0 0 0 0   color-mix(in oklch, var(--health-color) 55%, transparent); }
+  70%  { box-shadow: 0 0 0 6px color-mix(in oklch, var(--health-color) 0%,  transparent); }
+  100% { box-shadow: 0 0 0 0   color-mix(in oklch, var(--health-color) 0%,  transparent); }
+}
+
+.health-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--health-color);
+  letter-spacing: 0.01em;
+}
+
+.health-gap {
+  margin-left: auto;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.health-desc {
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text);
+  opacity: 0.78;
+}
+
+.health-meta {
+  font-size: 9.5px;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.health-meta b {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Summary view ───────────────────────────── */
 
 #summaryView { display: grid; }
@@ -344,10 +421,10 @@ body {
   color: var(--text);
 }
 
-/* 3-column mini stats */
+/* 2-column mini stats */
 .quads {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
 }

@@ -4,7 +4,7 @@
 
 工具栏图标直接展示实时可用额度，点击图标可在面板中查看今日、本周、累计、订阅等详情。
 
-## 调用的接口（仅访问 https://anyrouter.top）
+## 调用的接口（额度数据：https://anyrouter.top）
 
 | 用途 | 方法 / 路径 |
 | --- | --- |
@@ -19,6 +19,19 @@
 Authorization: <Access Token>
 New-Api-User:  <用户 ID>
 ```
+
+## 运行状况探测（AI 健康检测）
+
+为识别「网站界面正常、但 AI 模型已崩溃」的情况，插件可主动发一个最小推理请求，判断模型是否真的在响应：
+
+```
+POST https://a-ocnfniawgw.cn-shanghai.fcapp.run/v1/messages
+x-api-key: <API 令牌（渠道 API Key，sk-xxx）>
+```
+
+- 探测后端固定为「大陆网络优化」直连地址，与额度接口的 `anyrouter.top` 不同；需在设置中配置 API 令牌。
+- 是否开启检测由「刷新间隔」控制：间隔 **> 0** 时随额度一起定时探测（探测失败会加密重试并弹系统通知，恢复后自动复位）；间隔设为 **0** 则关闭自动刷新与运行状况检测。
+- **即使间隔设为 0（检测关闭），点击面板右上角刷新按钮仍会强制探测一次**，结果显示在面板的健康卡片上（标注「手动」）。关闭状态下的手动探测只在面板内展示，不会把工具栏徽标染红、也不发系统通知（这些仅在开启检测时生效）；卡片结果会在下次保存设置或再次手动刷新时回落为「已关闭」。
 
 ## 产品口径
 
@@ -57,6 +70,6 @@ README.md       使用说明
 
 ## 隐私与权限
 
-- `userId` 与 `accessToken` 存储在 `chrome.storage.local`，不会同步到 Google 账号，也不会写入日志。
-- 插件只声明 `https://anyrouter.top/*` 域名权限，用于后台定时请求上述四个接口。
-- 不读取浏览器 Cookie，不调用第三方服务。
+- `userId`、`accessToken` 与 `apiToken` 存储在 `chrome.storage.local`，不会同步到 Google 账号，也不会写入日志。
+- 插件声明两个域名权限：`https://anyrouter.top/*`（额度与统计接口）与 `https://a-ocnfniawgw.cn-shanghai.fcapp.run/*`（AI 运行状况探测）。两者均为 AnyRouter 自有后端。
+- 不读取浏览器 Cookie，不调用与 AnyRouter 无关的第三方服务。

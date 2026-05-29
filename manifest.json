@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "AnyRouter Quota Monitor",
-  "version": "1.0.0",
-  "description": "在 Chrome 工具栏展示 AnyRouter 实时可用额度，并在面板中查看今日/本周用量、订阅与 RPM/TPM 详情。",
+  "version": "3.1.1",
+  "description": "在 Chrome 工具栏展示 AnyRouter 实时可用额度与 AI 健康状态（主动探测），并在面板中查看今日/本周用量、订阅与 RPM/TPM 详情。",
   "minimum_chrome_version": "110",
   "icons": {
     "16": "icon16.png",
@@ -25,9 +25,11 @@
   },
   "permissions": [
     "alarms",
+    "notifications",
     "storage"
   ],
   "host_permissions": [
-    "https://anyrouter.top/*"
+    "https://anyrouter.top/*",
+    "https://a-ocnfniawgw.cn-shanghai.fcapp.run/*"
   ]
 }

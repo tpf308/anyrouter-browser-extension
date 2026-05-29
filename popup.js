@@ -1,33 +1,35 @@
 const $ = (id) => document.getElementById(id);
 
 const el = {
-  accessTokenInput:  $("accessTokenInput"),
-  alertBox:          $("alertBox"),
-  badgePreview:      $("badgePreview"),
-  cancelKeyBtn:      $("cancelKeyBtn"),
-  configForm:        $("configForm"),
-  dailyBudget:       $("dailyBudget"),
-  emptyState:        $("emptyState"),
-  keyModal:          $("keyModal"),
-  openKeyBtn:        $("openKeyBtn"),
-  refreshButton:     $("refreshButton"),
-  remainingValue:    $("remainingValue"),
-  rpm:               $("rpm"),
-  statusLabel:       $("statusLabel"),
-  summaryView:       $("summaryView"),
-  todayCalls:        $("todayCalls"),
-  todayTokens:       $("todayTokens"),
-  todayUsed:         $("todayUsed"),
-  totalRequests:     $("totalRequests"),
-  totalTokens:       $("totalTokens"),
-  totalUsed:         $("totalUsed"),
-  updatedAt:         $("updatedAt"),
-  usageBar:          $("usageBar"),
-  userIdInput:       $("userIdInput"),
-  weekBudget:        $("weekBudget"),
-  weekCalls:         $("weekCalls"),
-  weekPercent:       $("weekPercent"),
-  weekUsed:          $("weekUsed"),
+  accessTokenInput:    $("accessTokenInput"),
+  alertBox:            $("alertBox"),
+  apiTokenInput:       $("apiTokenInput"),
+  badgePreview:        $("badgePreview"),
+  cancelKeyBtn:        $("cancelKeyBtn"),
+  configForm:          $("configForm"),
+  emptyState:          $("emptyState"),
+  healthCard:          $("healthCard"),
+  healthDesc:          $("healthDesc"),
+  healthGap:           $("healthGap"),
+  healthLabel:         $("healthLabel"),
+  healthLastTs:        $("healthLastTs"),
+  healthPulse:         $("healthPulse"),
+  historyUsed:         $("historyUsed"),
+  keyModal:            $("keyModal"),
+  openKeyBtn:          $("openKeyBtn"),
+  refreshButton:       $("refreshButton"),
+  refreshMinutesInput: $("refreshMinutesInput"),
+  remainingValue:      $("remainingValue"),
+  rpm:                 $("rpm"),
+  statusLabel:         $("statusLabel"),
+  summaryView:         $("summaryView"),
+  todayCalls:          $("todayCalls"),
+  todayTokens:         $("todayTokens"),
+  todayUsed:           $("todayUsed"),
+  totalRequests:       $("totalRequests"),
+  totalTokens:         $("totalTokens"),
+  tpm:                 $("tpm"),
+  userIdInput:         $("userIdInput"),
 };
 
 const storageGet = (keys) =>
@@ -47,15 +49,6 @@ const sendMessage = (message) =>
 
 const set = (element, value) => { element.textContent = value ?? "-"; };
 
-const formatUpdatedAt = (timestamp) => {
-  if (!timestamp) return "未刷新";
-  return new Date(timestamp).toLocaleString("zh-CN", {
-    month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit",
-    hour12: false,
-  });
-};
-
 const showAlert = (message) => {
   el.alertBox.hidden = !message;
   el.alertBox.textContent = message || "";
@@ -70,6 +63,8 @@ const openKeyModal = async () => {
   const config = result[UsageQuota.CONFIG_KEY] || {};
   el.userIdInput.value = config.userId ? String(config.userId) : "";
   el.accessTokenInput.value = config.accessToken || "";
+  el.apiTokenInput.value = config.apiToken || "";
+  el.refreshMinutesInput.value = String(UsageQuota.normalizeRefreshMinutes(config.refreshMinutes));
   el.keyModal.hidden = false;
   if (!el.userIdInput.value) {
     el.userIdInput.focus();
@@ -124,22 +119,22 @@ const renderSnapshot = (snapshot, config) => {
 
   set(el.remainingValue,    data.formatted.weekRemaining);
   set(el.badgePreview,      data.badgeText);
-  set(el.weekUsed,          data.formatted.weekUsed);
-  set(el.weekBudget,        data.formatted.weeklyBudget);
+  set(el.historyUsed,       data.formatted.totalUsed);
   set(el.todayUsed,         data.formatted.todayUsed);
   set(el.todayCalls,        data.formatted.todayCalls);
   set(el.todayTokens,       data.formatted.todayTokens);
-  set(el.dailyBudget,       data.formatted.dailyBudget);
-  set(el.weekCalls,         data.formatted.weekCalls);
   set(el.totalRequests,     data.formatted.totalRequests);
-  set(el.totalUsed,         data.formatted.totalUsed);
   set(el.totalTokens,       data.formatted.totalTokens);
   set(el.rpm,               data.formatted.rpm);
-  set(el.updatedAt,         formatUpdatedAt(snapshot.updatedAt));
+  set(el.tpm,               data.formatted.tpm);
 
-  const pct = Math.round(data.weekUsedRatio * 100);
-  el.usageBar.style.transform = `scaleX(${data.weekUsedRatio})`;
-  set(el.weekPercent, `${pct}%`);
+  // 渲染 AI 健康卡片
+  const health = data.health || { state: "unknown", label: "未检测", description: "", metaText: "-", lastSuccessText: "-" };
+  el.healthCard.dataset.state = health.state;
+  set(el.healthLabel,  health.label);
+  set(el.healthDesc,   health.description || "");
+  set(el.healthLastTs, health.lastSuccessText || "-");
+  set(el.healthGap,    health.metaText && health.metaText !== "-" ? health.metaText : "");
 };
 
 const loadState = async () => {
@@ -154,11 +149,11 @@ const loadState = async () => {
   }
 };
 
-const refreshUsage = async () => {
+const refreshUsage = async ({ forceProbe = false } = {}) => {
   el.refreshButton.disabled = true;
   el.refreshButton.classList.add("spinning");
   try {
-    const snapshot = await sendMessage({ type: "refreshUsage" });
+    const snapshot = await sendMessage({ type: "refreshUsage", forceProbe });
     const result = await storageGet(UsageQuota.CONFIG_KEY);
     renderSnapshot(snapshot, result[UsageQuota.CONFIG_KEY] || {});
   } catch (error) {
@@ -180,6 +175,8 @@ el.configForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const userId = UsageQuota.normalizeUserId(el.userIdInput.value);
   const accessToken = UsageQuota.normalizeAccessToken(el.accessTokenInput.value);
+  const apiToken = UsageQuota.normalizeApiToken(el.apiTokenInput.value);
+  const refreshMinutes = UsageQuota.normalizeRefreshMinutes(el.refreshMinutesInput.value);
 
   if (!userId) {
     el.userIdInput.focus();
@@ -195,7 +192,8 @@ el.configForm.addEventListener("submit", async (event) => {
   const config = {
     userId,
     accessToken,
-    refreshMinutes: 1,
+    apiToken,
+    refreshMinutes,
   };
   await storageSet({ [UsageQuota.CONFIG_KEY]: config });
   closeKeyModal();
@@ -203,6 +201,7 @@ el.configForm.addEventListener("submit", async (event) => {
   await refreshUsage();
 });
 
-el.refreshButton.addEventListener("click", refreshUsage);
+// 点刷新按钮：强制探测一次运行状况（即使设置里关闭了自动监测）
+el.refreshButton.addEventListener("click", () => refreshUsage({ forceProbe: true }));
 
 loadState();
