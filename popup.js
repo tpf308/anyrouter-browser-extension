@@ -1,9 +1,8 @@
 const $ = (id) => document.getElementById(id);
 
 const el = {
-  accessTokenInput:    $("accessTokenInput"),
   alertBox:            $("alertBox"),
-  apiTokenInput:       $("apiTokenInput"),
+  apiKeyInput:         $("apiKeyInput"),
   badgePreview:        $("badgePreview"),
   cancelKeyBtn:        $("cancelKeyBtn"),
   configForm:          $("configForm"),
@@ -14,7 +13,6 @@ const el = {
   keyModal:            $("keyModal"),
   openKeyBtn:          $("openKeyBtn"),
   refreshButton:       $("refreshButton"),
-  refreshMinutesInput: $("refreshMinutesInput"),
   remainingValue:      $("remainingValue"),
   rpm:                 $("rpm"),
   statusLabel:         $("statusLabel"),
@@ -72,15 +70,14 @@ const openKeyModal = async () => {
   const result = await storageGet(UsageQuota.CONFIG_KEY);
   const config = result[UsageQuota.CONFIG_KEY] || {};
   el.userIdInput.value = config.userId ? String(config.userId) : "";
-  el.accessTokenInput.value = config.accessToken || "";
-  el.apiTokenInput.value = config.apiToken || "";
-  el.refreshMinutesInput.value = String(UsageQuota.normalizeRefreshMinutes(config.refreshMinutes));
+  // accessToken 与 apiToken 共用同一个 API Key；展示时回退到任一已存值
+  el.apiKeyInput.value = config.apiToken || config.accessToken || "";
   el.keyModal.hidden = false;
   if (!el.userIdInput.value) {
     el.userIdInput.focus();
   } else {
-    el.accessTokenInput.focus();
-    el.accessTokenInput.select();
+    el.apiKeyInput.focus();
+    el.apiKeyInput.select();
   }
 };
 
@@ -168,8 +165,8 @@ const renderProbeOnly = (snapshot, config) => {
   setQuotaVisible(false);
   showAlert(
     hasCreds
-      ? "登录已失效：仅站点检测可用。请在设置中更新 Access Token 以恢复额度查询。"
-      : "未登录：仅站点检测可用。填写用户 ID + Access Token 可查看额度。"
+      ? "登录已失效：仅站点检测可用。请在设置中更新 API Key 以恢复额度查询。"
+      : "未登录：仅站点检测可用。填写用户 ID + API Key 可查看额度。"
   );
 
   renderHealthTargets(health);
@@ -276,27 +273,21 @@ el.keyModal.addEventListener("click", (e) => {
 el.configForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const userId = UsageQuota.normalizeUserId(el.userIdInput.value);
-  const accessToken = UsageQuota.normalizeAccessToken(el.accessTokenInput.value);
-  const apiToken = UsageQuota.normalizeApiToken(el.apiTokenInput.value);
-  const refreshMinutes = UsageQuota.normalizeRefreshMinutes(el.refreshMinutesInput.value);
+  // 单个 API Key 同时充当 Access Token（查额度）与 API 令牌（站点检测）
+  const apiKey = UsageQuota.normalizeApiToken(el.apiKeyInput.value);
 
-  const hasLogin = Boolean(userId) && Boolean(accessToken);
-  const hasProbe = Boolean(apiToken);
-
-  // 至少要能做点什么：完整登录（查额度）或填了 API 令牌（检测站点）
-  if (!hasLogin && !hasProbe) {
-    if (userId && !accessToken) el.accessTokenInput.focus();
-    else if (!userId && accessToken) el.userIdInput.focus();
-    else el.apiTokenInput.focus();
-    showAlert("请至少填写 API 令牌（用于检测站点），或同时填写用户 ID + Access Token（用于查询额度）。");
+  // 必须有 API Key：缺它则既查不了额度也检测不了站点
+  if (!apiKey) {
+    el.apiKeyInput.focus();
+    showAlert("请填写 API Key（用于查询额度与检测站点）。");
     return;
   }
+  // 用户 ID 可留空：此时仅作站点检测，面板会给出「未登录」提示
 
   const config = {
     userId,
-    accessToken,
-    apiToken,
-    refreshMinutes,
+    accessToken: apiKey,
+    apiToken: apiKey,
   };
   await storageSet({ [UsageQuota.CONFIG_KEY]: config });
   closeKeyModal();
@@ -304,7 +295,7 @@ el.configForm.addEventListener("submit", async (event) => {
   await refreshUsage();
 });
 
-// 点刷新按钮：强制探测一次运行状况（即使设置里关闭了自动监测）
+// 点刷新按钮：强制立即探测一次运行状况（不必等内置的 5 分钟周期）
 el.refreshButton.addEventListener("click", () => refreshUsage({ forceProbe: true }));
 
 loadState();

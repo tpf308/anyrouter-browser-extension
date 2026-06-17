@@ -6,7 +6,7 @@
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body class="tone-idle">
-    <!-- Access Token 设置弹窗 -->
+    <!-- 访问凭据设置弹窗 -->
     <div class="modal" id="keyModal" hidden>
       <div class="modal-card">
         <div class="modal-header">
@@ -34,38 +34,14 @@
             />
           </label>
           <label class="field">
-            <span class="field-label">Access Token</span>
+            <span class="field-label">API Key</span>
             <input
-              id="accessTokenInput"
-              name="accessToken"
+              id="apiKeyInput"
+              name="apiKey"
               type="password"
-              placeholder="控制台「访问令牌」"
+              placeholder="控制台令牌（查额度 + 站点检测共用）"
               autocomplete="off"
               spellcheck="false"
-            />
-          </label>
-          <label class="field">
-            <span class="field-label">API 令牌（站点检测用，可单独使用）</span>
-            <input
-              id="apiTokenInput"
-              name="apiToken"
-              type="password"
-              placeholder="控制台「API 令牌」，仅填它即可检测站点"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </label>
-          <label class="field">
-            <span class="field-label">刷新间隔（分钟，1–60，0关闭）</span>
-            <input
-              id="refreshMinutesInput"
-              name="refreshMinutes"
-              type="number"
-              min="0"
-              max="60"
-              step="1"
-              placeholder="10"
-              autocomplete="off"
             />
           </label>
           <div class="modal-actions">
@@ -142,7 +118,7 @@
           <path d="M21 2l-9.6 9.6"/>
           <path d="M15.5 7.5l3 3L22 7l-3-3"/>
         </svg>
-        <p>点击右上角钥匙按钮<br>仅填 API 令牌即可检测站点<br>填用户 ID + Access Token 可查额度</p>
+        <p>点击右上角钥匙按钮<br>填写用户 ID + API Key<br>即可查看额度并检测站点</p>
       </section>
     </main>
 

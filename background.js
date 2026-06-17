@@ -67,7 +67,7 @@ const getActionState = (snapshot) => {
     return {
       badge: "SET",
       tone: "idle",
-      title: "AnyRouter Quota：请先配置 Access Token + 用户 ID",
+      title: "AnyRouter Quota：请先配置 API Key + 用户 ID",
       ratio: null,
     };
   }
@@ -95,7 +95,7 @@ const getActionState = (snapshot) => {
           ? `AnyRouter：AI 探测失败（${health.description || "未知错误"}）`
           : "AnyRouter Quota：仅站点检测（未登录）",
         health?.label ? `AI 状态：${health.label}` : "",
-        "配置 Access Token + 用户 ID 可查看额度",
+        "配置 API Key + 用户 ID 可查看额度",
       ]
         .filter(Boolean)
         .join("\n"),
@@ -550,7 +550,7 @@ const fetchUsage = async ({ forceProbe = false } = {}) => {
     return setSnapshot({
       state: "unconfigured",
       updatedAt: null,
-      errorMessage: "请配置 Access Token 和用户 ID",
+      errorMessage: "请配置 API Key 和用户 ID",
     });
   }
 
@@ -575,7 +575,7 @@ const fetchUsage = async ({ forceProbe = false } = {}) => {
       return setSnapshot({
         state: "unconfigured",
         updatedAt: null,
-        errorMessage: userBody?.message || "Access Token 或用户 ID 无效",
+        errorMessage: userBody?.message || "API Key 或用户 ID 无效",
       });
     }
 

@@ -22,10 +22,11 @@
 
   const MAX_RANGE_SECONDS = 2592000; // 后端限制最长 30 天
 
-  const DEFAULT_REFRESH_MINUTES = 10;
-  const MIN_REFRESH_MINUTES = 0; // 0 = 关闭自动刷新与运行状况检测
+  // 刷新间隔已内置固定 5 分钟，不再由用户配置（设置面板已移除该字段）。
+  const DEFAULT_REFRESH_MINUTES = 5;
+  const MIN_REFRESH_MINUTES = 0;
   const MAX_REFRESH_MINUTES = 60;
-  // AI 探测三段式：正常 10 min → 失败后 3 min 密集重试 → 累计 40 次（≈2h）仍失败 → 停止自动探测，等用户手动刷新
+  // AI 探测三段式：正常 5 min → 失败后 3 min 密集重试 → 累计 40 次（≈2h）仍失败 → 停止自动探测，等用户手动刷新
   const AGGRESSIVE_REFRESH_MINUTES = 3;
   const GIVE_UP_FAILURE_COUNT = 40;
 
@@ -105,14 +106,13 @@
   };
 
   // 根据「是否在用 AI」(休眠) 与「上次探测连续失败次数」挑选实际刷新周期：
-  //   配置间隔 ≤ 0      → null（用户关闭，清 alarm）
   //   休眠中(你没在用)   → 休眠心跳间隔（≥ 正常间隔，只读 request_count、不探测）—— 优先级最高
   //   连续失败 ≥ 40 次   → null（停自动探测，等手动刷新）
   //   连续失败 1–39 次   → AGGRESSIVE（3 min 密集重试）
-  //   正常              → 用户配置（默认 10 min）
+  //   正常              → 内置固定间隔（5 min）
+  // 间隔已内置固定，不再读取 config.refreshMinutes（保留 config 形参以兼容调用方）。
   const getEffectiveRefreshMinutes = (config, probeState, activityState) => {
-    const base = normalizeRefreshMinutes(config?.refreshMinutes);
-    if (base <= 0) return null; // 间隔=0：清除 alarm，关闭自动刷新与运行状况检测
+    const base = DEFAULT_REFRESH_MINUTES; // 内置固定 5 min
     // 空闲优先：你没在用 AI 时，无论 AI 是否异常都进入休眠心跳，不再主动探测
     if (activityState?.mode === "dormant") return Math.max(DORMANT_REFRESH_MINUTES, base);
     const fails = toNumber(probeState?.consecutiveFailures);
@@ -121,8 +121,8 @@
     return base;
   };
 
-  // 运行状况检测开关已并入「刷新间隔」：间隔 > 0 即开启，间隔 = 0 即关闭（无自动刷新、无自动探测）
-  const normalizeHealthEnabled = (config) => normalizeRefreshMinutes(config?.refreshMinutes) > 0;
+  // 运行状况检测已随「内置 5 min 刷新」常开；是否真正发探测仍由 hasValidApiToken / 活跃状态门控。
+  const normalizeHealthEnabled = () => true;
 
   // 被动活跃判定：根据上轮活跃状态 + 本轮读到的累计 request_count，判断「是否检测到真实使用」并给出新的休眠/活跃模式。
   // 本轮探测结果未知时也能调用——successfulProbeTotal 的滚动累加交由调用方在拿到探测结果后完成

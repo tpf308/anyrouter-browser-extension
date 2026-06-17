@@ -16,9 +16,11 @@
 所有请求都使用以下 header：
 
 ```
-Authorization: <Access Token>
+Authorization: <API Key>
 New-Api-User:  <用户 ID>
 ```
+
+> 自 v2.1.1 起，设置面板只保留**用户 ID** 与单个 **API Key** 两项：该 API Key 同时用作额度查询的 `Authorization` 与站点探测的 `x-api-key`（详见下文「凭据说明」）。
 
 ## 运行状况探测（AI 健康检测）
 
@@ -28,13 +30,13 @@ New-Api-User:  <用户 ID>
 ```
 POST https://anyrouter.top/v1/messages                       ← 主站
 POST https://a-ocnfniawgw.cn-shanghai.fcapp.run/v1/messages   ← 大陆直连
-x-api-key: <API 令牌（渠道 API Key，sk-xxx）>
+x-api-key: <API Key>
 ```
 
-- 两条线路是同一服务的不同入口：**主站** `anyrouter.top` 与**大陆网络优化直连** `a-ocnfniawgw.cn-shanghai.fcapp.run`；探测需在设置中配置 API 令牌。
+- 两条线路是同一服务的不同入口：**主站** `anyrouter.top` 与**大陆网络优化直连** `a-ocnfniawgw.cn-shanghai.fcapp.run`；探测需在设置中配置 API Key。
 - **告警口径：仅当两条线路都探测失败时**，才把工具栏徽标染红「AI!」并弹系统通知；只要任一条能通即视为 AI 可用。面板里两条线路始终各自独立显示状态（绿色正常 / 红色异常 / 灰色未检测）。
-- 是否开启检测由「刷新间隔」控制：间隔 **> 0** 时两条线路随额度一起定时探测（双线路均失败会加密重试并弹系统通知，恢复后自动复位）；间隔设为 **0** 则关闭自动刷新与运行状况检测。
-- **即使间隔设为 0（检测关闭），点击面板右上角刷新按钮仍会强制探测两条线路一次**，结果显示在面板的健康卡片上（标注「手动」）。关闭状态下的手动探测只在面板内展示，不会把工具栏徽标染红、也不发系统通知（这些仅在开启检测时生效）；卡片结果会在下次保存设置或再次手动刷新时回落为「已关闭」。
+- **刷新间隔已内置固定为 5 分钟**，设置面板不再暴露该选项：配置 API Key 后两条线路即随额度一起每 5 分钟定时探测（双线路均失败会以 3 分钟密集重试并弹系统通知，恢复后自动复位；连续约 2 小时仍失败则停自动探测、等手动刷新）。你长时间未实际使用 AI 时会自动转入休眠心跳（仅读累计请求数、不发探测），回来后自动恢复。
+- **点击面板右上角刷新按钮可强制立即探测两条线路一次**（无需等待 5 分钟周期），结果显示在面板的健康卡片上（标注「手动」）。
 
 ## 产品口径
 
@@ -53,11 +55,20 @@ x-api-key: <API 令牌（渠道 API Key，sk-xxx）>
 3. 点击「加载已解压的扩展程序」。
 4. 选择本目录（包含 `manifest.json`）。
 5. 点击工具栏插件图标 → 右上角钥匙按钮，填写：
-   - **用户 ID**：AnyRouter 控制台「个人设置」中的数字 ID
-   - **Access Token**：控制台「个人设置 → 访问令牌」中生成并复制的令牌
+   - **用户 ID**：AnyRouter 控制台「个人设置」中的数字 ID（可留空，此时仅做站点检测、不查额度）
+   - **API Key**：用于鉴权的令牌（见下方「凭据说明」）
 6. 点击「保存」，面板会自动刷新并展示数据。
 
-> Access Token 和 API Key（`sk-xxx`）不是同一个东西：前者是控制台账户层面的访问凭据（用于管理后台接口），后者是用于转发 LLM 请求的渠道令牌。本插件需要的是 **Access Token**。
+### 凭据说明
+
+为简化设置，本插件把额度查询用的 **Access Token** 与站点探测用的渠道 **API Key（`sk-xxx`）** 合并成了同一个 **API Key** 输入框——填入的值会同时用作两类请求的鉴权头。
+
+> ⚠️ 注意：在 AnyRouter（new-api 体系）里这两者本是**不同**的令牌——Access Token 是控制台账户层面的访问凭据（走 `Authorization`，用于管理后台接口查额度），渠道 API Key 则用于转发 LLM 请求（走 `x-api-key`，用于站点探测）。合并成一个字段后：
+>
+> - 填 **Access Token** → 额度查询可用，站点探测可能失败；
+> - 填渠道 **API Key（`sk-xxx`）** → 站点探测可用，额度查询可能失败。
+>
+> 只有当你的同一个令牌恰好被两类接口都接受时，两项功能才会同时可用。若发现其中一项不工作，多半就是这个原因。
 
 ## 文件结构
 
@@ -73,6 +84,6 @@ README.md       使用说明
 
 ## 隐私与权限
 
-- `userId`、`accessToken` 与 `apiToken` 存储在 `chrome.storage.local`，不会同步到 Google 账号，也不会写入日志。
+- `userId` 与 API Key 存储在 `chrome.storage.local`（API Key 同时写入 `accessToken` 与 `apiToken` 两个键），不会同步到 Google 账号，也不会写入日志。
 - 插件声明两个域名权限：`https://anyrouter.top/*`（额度与统计接口）与 `https://a-ocnfniawgw.cn-shanghai.fcapp.run/*`（AI 运行状况探测）。两者均为 AnyRouter 自有后端。
 - 不读取浏览器 Cookie，不调用与 AnyRouter 无关的第三方服务。
