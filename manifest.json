@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AnyRouter Quota Monitor",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "在 Chrome 工具栏展示 AnyRouter 实时可用额度与 AI 健康状态（主动探测），并在面板中查看今日/本周用量、订阅与 RPM/TPM 详情。",
   "minimum_chrome_version": "110",
   "icons": {

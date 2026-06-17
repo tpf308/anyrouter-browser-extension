@@ -9,6 +9,7 @@ const TONE_COLORS = {
   good: "#0f9f6e",
   warn: "#d97706",
   danger: "#dc2626",
+  partial: "#7c3aed",
   unknown: "#64748b",
   error: "#b91c1c",
   stale: "#92400e",
@@ -87,13 +88,17 @@ const getActionState = (snapshot) => {
     const enabled = snapshot.probeState?.enabled === true;
     // 沿用「仅开启监测时才让 AI 异常染红」的约定，避免监测关时手动探测把工具栏卡红
     const isAiDown = health?.state === "unhealthy" && enabled;
+    // 部分降级：仅单条线路异常 → 紫色提示，不报红
+    const isAiPartial = !isAiDown && health?.partial === true && enabled;
     return {
-      badge: isAiDown ? "AI!" : "SET",
-      tone: isAiDown ? "danger" : "idle",
+      badge: isAiDown ? "AI!" : isAiPartial ? "AI" : "SET",
+      tone: isAiDown ? "danger" : isAiPartial ? "partial" : "idle",
       title: [
         isAiDown
           ? `AnyRouter：AI 探测失败（${health.description || "未知错误"}）`
-          : "AnyRouter Quota：仅站点检测（未登录）",
+          : isAiPartial
+            ? "AnyRouter：单条线路异常（其余线路仍可用）"
+            : "AnyRouter Quota：仅站点检测（未登录）",
         health?.label ? `AI 状态：${health.label}` : "",
         "配置 API Key + 用户 ID 可查看额度",
       ]
@@ -111,24 +116,30 @@ const getActionState = (snapshot) => {
     // 关闭时（间隔=0）的手动探测结果只在面板卡片展示，不把工具栏染红、也不发通知，
     // 否则关闭状态下没有自动 tick 来复位，红色 AI! 会卡死。
     const isAiDown = health?.state === "unhealthy" && snapshot.probeState?.enabled === true;
+    // 部分降级：仅单条线路异常（其余线路仍通）→ 紫色提示，不报红
+    const isAiPartial = !isAiDown && health?.partial === true && snapshot.probeState?.enabled === true;
 
-    // 红色（danger）只保留给「AI 模型异常」告警；额度等级与抓取失败一律不用红色，
-    // 避免红色示警含义被稀释（诉求：只有检测到 AI 崩溃才变红）。
+    // 红色（danger）只保留给「全部线路均失败」的 AI 告警；单条线路异常用紫色，额度等级与抓取
+    // 失败一律不用红色，避免红色示警含义被稀释（诉求：只有所有站点都不可用才变红）。
     let tone;
     if (isAiDown) {
-      tone = "danger";                         // 唯一的红色来源：AI 崩溃告警
+      tone = "danger";                         // 唯一的红色来源：所有线路均失败
+    } else if (isAiPartial) {
+      tone = "partial";                        // 单条线路异常 → 紫色，提示但不告警
     } else if (data.status.tone === "danger") {
       tone = "warn";                           // 额度耗尽/极低 → 橙色，不与 AI 告警的红色混淆
     } else {
       tone = data.status.tone;                 // good / warn：stale 快照（仅 onStartup 重绘）沿用上次额度色，保持原样
     }
-    const badge = isAiDown ? "AI!" : data.badgeText;
+    const badge = isAiDown ? "AI!" : isAiPartial ? "AI" : data.badgeText;
 
     const headlineLine = isAiDown
       ? `AnyRouter：AI 探测失败（${health.description || "未知错误"}）`
-      : isStale
-        ? "AnyRouter Quota：显示上次成功数据，刷新失败"
-        : "AnyRouter Quota";
+      : isAiPartial
+        ? "AnyRouter：单条线路异常（其余线路仍可用）"
+        : isStale
+          ? "AnyRouter Quota：显示上次成功数据，刷新失败"
+          : "AnyRouter Quota";
 
     return {
       badge,
@@ -692,7 +703,9 @@ const fetchUsage = async ({ forceProbe = false } = {}) => {
     // health 据本轮探测结果重算；据此触发/清掉故障通知（即便没有旧额度数据也能正确告警）
     await maybeNotifyHealth(previous?.data?.health || previous?.health, health, healthEnabled);
 
-    // 刷新失败只写入快照给弹窗展示，不更新工具栏图标/徽标
+    // 刷新失败写入快照供弹窗展示。本轮若实际探测了（probeResult 非空），AI 健康可能已变化
+    // （如线路恢复），必须重绘工具栏徽标，否则旧的红色「AI!」会卡死、线路恢复后警示不消失。
+    // 未探测（无新健康信息）时维持原样，避免纯额度故障无谓改动工具栏。
     return setSnapshot(
       {
         state: staleData ? "stale" : "error",
@@ -714,7 +727,7 @@ const fetchUsage = async ({ forceProbe = false } = {}) => {
             }
           : previous?.activityState,
       },
-      { renderActionState: false }
+      { renderActionState: Boolean(probeResult) }
     );
   } finally {
     clearTimeout(timeout);

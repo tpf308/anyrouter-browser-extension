@@ -420,7 +420,12 @@
       ...statusFromProbe(t, enabled, false),
     }));
 
-    return { ...aggregate, targets };
+    // 部分降级：聚合仍 healthy（至少一条线路通），但有线路实测失败 → 标记 partial。
+    // 工具栏徽标据此用紫色提示「单条线路异常」，区别于「全部线路失败」的红色告警。
+    const downCount = targets.filter((t) => t.state === "unhealthy").length;
+    const partial = aggregate.state === "healthy" && downCount > 0;
+
+    return { ...aggregate, partial, targets };
   };
 
   // 从 /api/subscription/self 提取活跃订阅
