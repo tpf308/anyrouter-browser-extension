@@ -8,7 +8,11 @@
   const PROBE_PATH = "/v1/messages";
   // 探测专用后端：大陆网络优化直连地址（独立于额度接口的 siteUrl）
   const PROBE_BASE_URL = "https://a-ocnfniawgw.cn-shanghai.fcapp.run";
-  const PROBE_MODEL = "claude-haiku-4-5-20251001";
+  // 探测模型固定用 claude-opus-4-8——即用户实际使用的模型。早期用 claude-haiku-4-5 探测时，
+  // 遇到 opus 线路不可用、但 haiku 仍能响应的情况，探测会误报「站点正常」；改用 opus 后，
+  // 探测结果与用户真实可用性一致（haiku 通而 opus 不通时也如实报异常）。每次探测为 max_tokens:1 的
+  // 最小请求、单次开销极小，但会以 opus（而非旧版 haiku）计入平台使用日志。
+  const PROBE_MODEL = "claude-opus-4-8";
   // 探测线路清单：主站与大陆直连后端各探一次，两条结果都展示。
   // 主站在前，与「同时探测 anyrouter.top 和 fcapp.run」的列举顺序一致。
   const PROBE_TARGETS = [
