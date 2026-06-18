@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "AnyRouter Quota Monitor",
-  "version": "2.1.3",
-  "description": "在 Chrome 工具栏展示 AnyRouter 实时可用额度与 AI 健康状态（主动探测），并在面板中查看今日/本周用量、订阅与 RPM/TPM 详情。",
+  "version": "2.2.0",
+  "description": "在 Chrome 工具栏展示 AnyRouter 已使用额度，并主动探测 claude-opus-4-8 健康状态（主站 + 大陆直连双线路）。仅需一个 API Key。",
   "minimum_chrome_version": "110",
   "icons": {
     "16": "icon16.png",

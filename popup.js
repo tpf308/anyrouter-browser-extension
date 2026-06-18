@@ -1,30 +1,19 @@
 const $ = (id) => document.getElementById(id);
 
 const el = {
-  alertBox:            $("alertBox"),
-  apiKeyInput:         $("apiKeyInput"),
-  badgePreview:        $("badgePreview"),
-  cancelKeyBtn:        $("cancelKeyBtn"),
-  configForm:          $("configForm"),
-  emptyState:          $("emptyState"),
-  healthCard:          $("healthCard"),
-  healthTargets:       $("healthTargets"),
-  historyUsed:         $("historyUsed"),
-  keyModal:            $("keyModal"),
-  openKeyBtn:          $("openKeyBtn"),
-  refreshButton:       $("refreshButton"),
-  remainingValue:      $("remainingValue"),
-  rpm:                 $("rpm"),
-  statusLabel:         $("statusLabel"),
-  statusNote:          $("statusNote"),
-  summaryView:         $("summaryView"),
-  todayCalls:          $("todayCalls"),
-  todayTokens:         $("todayTokens"),
-  todayUsed:           $("todayUsed"),
-  totalRequests:       $("totalRequests"),
-  totalTokens:         $("totalTokens"),
-  tpm:                 $("tpm"),
-  userIdInput:         $("userIdInput"),
+  alertBox:       $("alertBox"),
+  apiKeyInput:    $("apiKeyInput"),
+  cancelKeyBtn:   $("cancelKeyBtn"),
+  configForm:     $("configForm"),
+  emptyState:     $("emptyState"),
+  healthCard:     $("healthCard"),
+  healthTargets:  $("healthTargets"),
+  keyModal:       $("keyModal"),
+  openKeyBtn:     $("openKeyBtn"),
+  refreshButton:  $("refreshButton"),
+  statusLabel:    $("statusLabel"),
+  statusNote:     $("statusNote"),
+  summaryView:    $("summaryView"),
 };
 
 const storageGet = (keys) =>
@@ -49,40 +38,36 @@ const showAlert = (message) => {
   el.alertBox.textContent = message || "";
 };
 
-// 顶栏「数据过期」后面的内联失败原因，省去独立的提示条
+// 顶栏状态文字后面的内联失败原因
 const setStatusNote = (message) => {
   el.statusNote.hidden = !message;
   el.statusNote.textContent = message || "";
 };
 
+// 注意：用 classList 切换而非整体覆盖 className，避免清掉 modal-open（弹窗撑高用）等非 tone 类
+const TONE_CLASSES = [
+  "tone-good", "tone-warn", "tone-partial", "tone-danger", "tone-error",
+  "tone-stale", "tone-idle", "tone-loading", "tone-unknown",
+];
 const setTone = (tone) => {
-  document.body.className = `tone-${tone || "idle"}`;
-};
-
-// 额度块（hero/quads/cells）整体显隐——仅探测模式下隐藏，只留 AI 健康卡片
-const setQuotaVisible = (visible) => {
-  document.querySelectorAll(".hero, .quads, .cells").forEach((node) => {
-    node.hidden = !visible;
-  });
+  document.body.classList.remove(...TONE_CLASSES);
+  document.body.classList.add(`tone-${tone || "idle"}`);
 };
 
 const openKeyModal = async () => {
   const result = await storageGet(UsageQuota.CONFIG_KEY);
   const config = result[UsageQuota.CONFIG_KEY] || {};
-  el.userIdInput.value = config.userId ? String(config.userId) : "";
-  // accessToken 与 apiToken 共用同一个 API Key；展示时回退到任一已存值
+  // 兼容旧配置：apiToken 优先，回退到旧的 accessToken
   el.apiKeyInput.value = config.apiToken || config.accessToken || "";
   el.keyModal.hidden = false;
-  if (!el.userIdInput.value) {
-    el.userIdInput.focus();
-  } else {
-    el.apiKeyInput.focus();
-    el.apiKeyInput.select();
-  }
+  document.body.classList.add("modal-open"); // 撑高弹窗，让凭据浮层有空间居中
+  el.apiKeyInput.focus();
+  el.apiKeyInput.select();
 };
 
 const closeKeyModal = () => {
   el.keyModal.hidden = true;
+  document.body.classList.remove("modal-open");
 };
 
 const renderUnconfigured = (message) => {
@@ -95,7 +80,7 @@ const renderUnconfigured = (message) => {
 };
 
 // 渲染 AI 健康卡片：逐条线路（主站 / 大陆直连）各一行；卡片整体 data-state 取聚合 health（两条都挂才红框）。
-// health.targets 为空（缺令牌 / 已关闭 / 旧快照）时回退成单行聚合状态。
+// health.targets 为空（缺令牌 / 旧快照）时回退成单行聚合状态。
 const renderHealthTargets = (health) => {
   const card = el.healthCard;
   const container = el.healthTargets;
@@ -149,90 +134,36 @@ const renderHealthTargets = (health) => {
   }
 };
 
-// 未登录（或登录失效）但配了 API 令牌：只展示 AI 站点检测卡片，隐藏额度块
-const renderProbeOnly = (snapshot, config) => {
-  const health =
-    snapshot?.health || UsageQuota.computeHealth(snapshot?.probeState, config);
-  const down = health.state === "unhealthy";
-  // 区分「从未登录」与「登录已失效」（有凭据但被服务端拒绝）
-  const hasCreds = UsageQuota.hasValidConfig(config);
-
-  setTone(down ? "danger" : "idle");
-  set(el.statusLabel, "仅检测");
-  setStatusNote("");
-  el.emptyState.hidden = true;
-  el.summaryView.hidden = false;
-  setQuotaVisible(false);
-  showAlert(
-    hasCreds
-      ? "登录已失效：仅站点检测可用。请在设置中更新 API Key 以恢复额度查询。"
-      : "未登录：仅站点检测可用。填写用户 ID + API Key 可查看额度。"
-  );
-
-  renderHealthTargets(health);
-};
-
 const renderSnapshot = (snapshot, config) => {
-  const loggedIn = UsageQuota.hasValidConfig(config);
-
-  // 仅探测快照（未登录或登录失效但有 API 令牌）：只展示 AI 健康卡片，隐藏额度块
-  if (snapshot?.state === "probe-only") {
-    renderProbeOnly(snapshot, config);
-    return;
-  }
-
-  if (!loggedIn) {
-    // 未登录但配了 API 令牌：即便后台还没探测，也展示检测卡片邀请手动探测
-    if (UsageQuota.hasValidApiToken(config)) {
-      renderProbeOnly(snapshot, config);
-      return;
-    }
+  // 未配置 API Key
+  if (!UsageQuota.hasValidApiToken(config) || snapshot?.state === "unconfigured") {
     renderUnconfigured(snapshot?.errorMessage || "");
     return;
   }
 
-  if (snapshot?.state === "unconfigured") {
-    renderUnconfigured(snapshot.errorMessage || "");
-    return;
-  }
-
   el.emptyState.hidden = true;
-  setQuotaVisible(true);
-
-  if (!snapshot?.data) {
-    setTone(snapshot?.state === "error" ? "error" : "idle");
-    set(el.statusLabel, snapshot?.state === "error" ? "查询失败" : "等待刷新");
-    setStatusNote("");
-    el.summaryView.hidden = true;
-    showAlert(snapshot?.errorMessage || "保存凭据后点击刷新，获取额度数据。");
-    return;
-  }
-
-  const data = snapshot.data;
-  const isStale = snapshot.state === "stale";
-  const tone = isStale ? "stale" : data.status.tone;
-
-  setTone(tone);
-  set(el.statusLabel, isStale ? "数据过期" : data.status.label);
-  // 刷新失败原因紧跟在「数据过期」后面，不再单独占一条提示
-  setStatusNote(isStale ? `刷新失败：${snapshot.errorMessage || "请稍后重试"}` : "");
-  showAlert("");
-
   el.summaryView.hidden = false;
 
-  set(el.remainingValue,    data.formatted.weekRemaining);
-  set(el.badgePreview,      data.badgeText);
-  set(el.historyUsed,       data.formatted.totalUsed);
-  set(el.todayUsed,         data.formatted.todayUsed);
-  set(el.todayCalls,        data.formatted.todayCalls);
-  set(el.todayTokens,       data.formatted.todayTokens);
-  set(el.totalRequests,     data.formatted.totalRequests);
-  set(el.totalTokens,       data.formatted.totalTokens);
-  set(el.rpm,               data.formatted.rpm);
-  set(el.tpm,               data.formatted.tpm);
+  // 健康状态：优先用快照里的，缺失则据 probeState 现算
+  const health =
+    snapshot?.data?.health ||
+    snapshot?.health ||
+    UsageQuota.computeHealth(snapshot?.probeState, config);
 
-  // 渲染 AI 健康卡片（逐条线路：主站 / 大陆直连）
-  const health = data.health || { state: "unknown", label: "未检测", description: "", metaText: "-", targets: [] };
+  // 顶栏状态跟随 AI 健康（与工具栏图标口径一致）
+  const balanceFailed = snapshot?.state === "stale" || snapshot?.state === "error";
+  let tone;
+  let label;
+  if (health?.state === "unhealthy") { tone = "danger"; label = "AI 异常"; }
+  else if (health?.partial) { tone = "partial"; label = "单条异常"; }
+  else if (health?.state === "healthy") { tone = "good"; label = "运行正常"; }
+  else { tone = "idle"; label = "等待检测"; }
+
+  setTone(tone);
+  set(el.statusLabel, label);
+  setStatusNote(balanceFailed ? `用量刷新失败：${snapshot.errorMessage || "请稍后重试"}` : "");
+  showAlert("");
+
   renderHealthTargets(health);
 };
 
@@ -272,24 +203,16 @@ el.keyModal.addEventListener("click", (e) => {
 
 el.configForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const userId = UsageQuota.normalizeUserId(el.userIdInput.value);
-  // 单个 API Key 同时充当 Access Token（查额度）与 API 令牌（站点检测）
+  // 单个 API Key 同时用作余额查询（Authorization: Bearer）与 opus 探测（x-api-key）
   const apiKey = UsageQuota.normalizeApiToken(el.apiKeyInput.value);
 
-  // 必须有 API Key：缺它则既查不了额度也检测不了站点
   if (!apiKey) {
     el.apiKeyInput.focus();
-    showAlert("请填写 API Key（用于查询额度与检测站点）。");
+    showAlert("请填写 API Key（用于查询余额与检测 opus）。");
     return;
   }
-  // 用户 ID 可留空：此时仅作站点检测，面板会给出「未登录」提示
 
-  const config = {
-    userId,
-    accessToken: apiKey,
-    apiToken: apiKey,
-  };
-  await storageSet({ [UsageQuota.CONFIG_KEY]: config });
+  await storageSet({ [UsageQuota.CONFIG_KEY]: { apiToken: apiKey } });
   closeKeyModal();
   showAlert("");
   await refreshUsage();

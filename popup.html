@@ -22,24 +22,12 @@
         </div>
         <form id="configForm">
           <label class="field">
-            <span class="field-label">用户 ID</span>
-            <input
-              id="userIdInput"
-              name="userId"
-              type="text"
-              inputmode="numeric"
-              placeholder="例如 12345"
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </label>
-          <label class="field">
             <span class="field-label">API Key</span>
             <input
               id="apiKeyInput"
               name="apiKey"
               type="password"
-              placeholder="控制台令牌（查额度 + 站点检测共用）"
+              placeholder="控制台令牌 sk-xxx（查余额 + opus 检测共用）"
               autocomplete="off"
               spellcheck="false"
             />
@@ -81,33 +69,11 @@
       <!-- 提示 -->
       <div class="alert" id="alertBox" hidden></div>
 
-      <!-- 数据视图 -->
+      <!-- 数据视图：只保留 AI 检测卡片，余额展示在工具栏图标上 -->
       <section id="summaryView" hidden>
         <!-- AI 健康状态卡片：逐条展示各线路（主站 / 大陆直连），由 popup.js 动态填充 -->
         <div class="health" id="healthCard">
           <div class="health-targets" id="healthTargets"></div>
-        </div>
-
-        <div class="hero">
-          <div class="hero-text">
-            <p class="hero-label">实时可用额度</p>
-            <p class="hero-val" id="remainingValue">$0.00</p>
-          </div>
-          <span class="badge" id="badgePreview">0</span>
-        </div>
-
-        <div class="quads">
-          <div class="quad"><span>今日消费</span><b id="todayUsed">$0.00</b></div>
-          <div class="quad"><span>历史消耗</span><b id="historyUsed">$0.00</b></div>
-        </div>
-
-        <div class="cells">
-          <div class="cell"><span>今日调用</span><b id="todayCalls">0</b></div>
-          <div class="cell"><span>今日 Token</span><b id="todayTokens">0</b></div>
-          <div class="cell"><span>总请求次数</span><b id="totalRequests">0</b></div>
-          <div class="cell"><span>总使用 Token</span><b id="totalTokens">0</b></div>
-          <div class="cell"><span>RPM</span><b id="rpm">0</b></div>
-          <div class="cell"><span>TPM</span><b id="tpm">0</b></div>
         </div>
       </section>
 
@@ -118,7 +84,7 @@
           <path d="M21 2l-9.6 9.6"/>
           <path d="M15.5 7.5l3 3L22 7l-3-3"/>
         </svg>
-        <p>点击右上角钥匙按钮<br>填写用户 ID + API Key<br>即可查看额度并检测站点</p>
+        <p>点击右上角钥匙按钮<br>填写 API Key<br>即可显示余额并检测 opus</p>
       </section>
     </main>
 

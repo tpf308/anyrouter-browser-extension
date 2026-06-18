@@ -20,6 +20,7 @@
 
 body.tone-good    { --status: oklch(0.55 0.17 162.48); }
 body.tone-warn    { --status: #d97706; }
+body.tone-partial { --status: #7c3aed; }
 body.tone-danger,
 body.tone-error   { --status: oklch(0.577 0.245 27.325); }
 body.tone-stale   { --status: #b45309; }
@@ -31,11 +32,13 @@ body.tone-unknown { --status: oklch(0.551 0.027 264.364); }
 
 body {
   width: 340px;
-  /* 弹窗高度足够显示访问凭据 modal 即可，summary 视图自身高度比这大 */
-  min-height: 320px;
   background: var(--bg);
   color: var(--text);
 }
+
+/* 平时弹窗按内容高度自适应（精简后内容很矮，避免下半部分大片空白）；
+   打开访问凭据 modal 时只设一个刚好容纳浮层的下限，使弹窗大小与主界面基本一致、不再额外撑高 */
+body.modal-open { min-height: 180px; }
 
 /* ── Modal ─────────────────────────────────── */
 
@@ -186,7 +189,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 11px;
+  padding: 2px 11px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -277,7 +280,7 @@ body {
 /* ── AI 健康卡片 ─────────────────────────────── */
 
 .health {
-  margin: 8px 11px 0;
+  margin: 0 11px;
   padding: 8px 11px;
   border-radius: 9px;
   background: var(--surf);
@@ -375,167 +378,10 @@ body {
   word-break: break-word;
 }
 
-/* ── Summary view ───────────────────────────── */
+/* ── Summary view（精简后只剩 AI 检测卡片） ──────── */
 
 #summaryView { display: grid; }
 #summaryView[hidden] { display: none; }
-
-/* 仅探测模式下隐藏额度块（这些块用了 flex/grid，原生 hidden 会被覆盖，需显式声明） */
-.hero[hidden],
-.quads[hidden],
-.cells[hidden] { display: none; }
-
-/* Hero */
-.hero {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 11px 12px 8px;
-}
-
-.hero-label {
-  font-size: 9px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--muted);
-  margin-bottom: 5px;
-}
-
-.hero-val {
-  font-size: 31px;
-  font-weight: 800;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
-  color: var(--text);
-}
-
-.badge {
-  min-width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: 10px;
-  background: var(--surf);
-  border: 1px solid var(--border);
-  font-size: 15px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--brand);
-  transition: color 300ms;
-}
-
-/* Progress bar */
-.progress-section {
-  padding: 0 12px 11px;
-  display: grid;
-  gap: 6px;
-}
-
-.track {
-  height: 3px;
-  background: var(--surf2);
-  border-radius: 2px;
-  overflow: hidden;
-}
-
-.fill {
-  display: block;
-  height: 100%;
-  background: var(--brand);
-  border-radius: inherit;
-  transform: scaleX(0);
-  transform-origin: left;
-  transition: transform 350ms cubic-bezier(0.16, 1, 0.3, 1), background 300ms;
-}
-
-.track-meta {
-  display: flex;
-  justify-content: space-between;
-  font-size: 10px;
-  color: var(--muted);
-}
-
-.track-meta b {
-  font-variant-numeric: tabular-nums;
-  color: var(--text);
-}
-
-/* 2-column mini stats */
-.quads {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-}
-
-.quad {
-  display: grid;
-  gap: 4px;
-  padding: 9px 8px;
-  border-right: 1px solid var(--border);
-}
-
-.quad:last-child { border-right: none; }
-
-.quad span {
-  font-size: 8px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.quad b {
-  font-size: 11px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-
-/* Dense 2-column data cells */
-.cells {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  padding: 5px 6px 8px;
-  gap: 1px;
-}
-
-.cell {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 5px 6px;
-  gap: 6px;
-  border-radius: 5px;
-  min-width: 0;
-}
-
-.cell:hover { background: var(--surf2); }
-
-.cell-full { grid-column: 1 / -1; }
-
-.cell span {
-  font-size: 10.5px;
-  color: var(--muted);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.cell b {
-  font-size: 10.5px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  color: var(--text);
-  text-align: right;
-  overflow-wrap: anywhere;
-  min-width: 0;
-}
 
 /* Empty state */
 .empty {

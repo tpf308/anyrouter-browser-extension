@@ -46,14 +46,9 @@ const setSnapshot = async (snapshot, { renderActionState = true } = {}) => {
 };
 
 const scheduleRefresh = async ({ immediate = true } = {}) => {
-  const config = await getConfig();
   const snapshot = await getSnapshot();
-  const periodMinutes = UsageQuota.getEffectiveRefreshMinutes(
-    config,
-    snapshot?.probeState,
-    snapshot?.activityState
-  );
-  // null = 给入「放弃」档：清掉 alarm，等用户手动点刷新
+  const periodMinutes = UsageQuota.getEffectiveRefreshMinutes(snapshot?.probeState);
+  // null = 「放弃」档：清掉 alarm，等用户手动点刷新
   if (periodMinutes === null) {
     chrome.alarms.clear(ALARM_NAME);
     return;
@@ -63,12 +58,19 @@ const scheduleRefresh = async ({ immediate = true } = {}) => {
   chrome.alarms.create(ALARM_NAME, opts);
 };
 
+// 周期可能因探测连续失败次数变化（正常 5min ↔ 3min 密集重试 ↔ 停），失败档变化时重排 alarm
+const rescheduleIfNeeded = async (previous, probeState) => {
+  const prevPeriod = UsageQuota.getEffectiveRefreshMinutes(previous?.probeState);
+  const nowPeriod = UsageQuota.getEffectiveRefreshMinutes(probeState);
+  if (prevPeriod !== nowPeriod) await scheduleRefresh({ immediate: false });
+};
+
 const getActionState = (snapshot) => {
   if (!snapshot || snapshot.state === "unconfigured") {
     return {
       badge: "SET",
       tone: "idle",
-      title: "AnyRouter Quota：请先配置 API Key + 用户 ID",
+      title: "AnyRouter：请先配置 API Key",
       ratio: null,
     };
   }
@@ -77,68 +79,31 @@ const getActionState = (snapshot) => {
     return {
       badge: "...",
       tone: "loading",
-      title: "AnyRouter Quota：正在刷新额度",
+      title: "AnyRouter：正在刷新",
       ratio: null,
     };
   }
 
-  // 仅探测（未登录/登录失效但配了 API 令牌）：工具栏只反映 AI 健康，不展示额度
-  if (snapshot.state === "probe-only") {
-    const health = snapshot.health;
-    const enabled = snapshot.probeState?.enabled === true;
-    // 沿用「仅开启监测时才让 AI 异常染红」的约定，避免监测关时手动探测把工具栏卡红
-    const isAiDown = health?.state === "unhealthy" && enabled;
-    // 部分降级：仅单条线路异常 → 紫色提示，不报红
-    const isAiPartial = !isAiDown && health?.partial === true && enabled;
-    return {
-      badge: isAiDown ? "AI!" : isAiPartial ? "AI" : "SET",
-      tone: isAiDown ? "danger" : isAiPartial ? "partial" : "idle",
-      title: [
-        isAiDown
-          ? `AnyRouter：AI 探测失败（${health.description || "未知错误"}）`
-          : isAiPartial
-            ? "AnyRouter：单条线路异常（其余线路仍可用）"
-            : "AnyRouter Quota：仅站点检测（未登录）",
-        health?.label ? `AI 状态：${health.label}` : "",
-        "配置 API Key + 用户 ID 可查看额度",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      ratio: null,
-    };
-  }
+  const data = snapshot.data;
+  // health 优先取快照顶层（余额失败时仍在），回退 data.health。
+  // 红色（danger）只保留给「全部线路均失败」的 AI 告警；单条线路异常用紫色；额度耗尽/极低降级为橙色。
+  const health = data?.health || snapshot.health;
+  const isAiDown = health?.state === "unhealthy";
+  const isAiPartial = !isAiDown && health?.partial === true;
 
-  if (snapshot.data) {
-    const data = snapshot.data;
+  if (data) {
     const isStale = snapshot.state === "stale";
-    const health = data.health;
-    // 仅在「开启检测」(刷新间隔>0) 时，让 AI 异常接管工具栏徽标；
-    // 关闭时（间隔=0）的手动探测结果只在面板卡片展示，不把工具栏染红、也不发通知，
-    // 否则关闭状态下没有自动 tick 来复位，红色 AI! 会卡死。
-    const isAiDown = health?.state === "unhealthy" && snapshot.probeState?.enabled === true;
-    // 部分降级：仅单条线路异常（其余线路仍通）→ 紫色提示，不报红
-    const isAiPartial = !isAiDown && health?.partial === true && snapshot.probeState?.enabled === true;
 
-    // 红色（danger）只保留给「全部线路均失败」的 AI 告警；单条线路异常用紫色，额度等级与抓取
-    // 失败一律不用红色，避免红色示警含义被稀释（诉求：只有所有站点都不可用才变红）。
-    let tone;
-    if (isAiDown) {
-      tone = "danger";                         // 唯一的红色来源：所有线路均失败
-    } else if (isAiPartial) {
-      tone = "partial";                        // 单条线路异常 → 紫色，提示但不告警
-    } else if (data.status.tone === "danger") {
-      tone = "warn";                           // 额度耗尽/极低 → 橙色，不与 AI 告警的红色混淆
-    } else {
-      tone = data.status.tone;                 // good / warn：stale 快照（仅 onStartup 重绘）沿用上次额度色，保持原样
-    }
-    const badge = isAiDown ? "AI!" : isAiPartial ? "AI" : data.badgeText;
+    // 已用额度本身无「危险档位」概念，颜色完全由 AI 健康决定：红=全挂、紫=单线异常、否则绿。
+    const tone = isAiDown ? "danger" : isAiPartial ? "partial" : "good";
+    const badge = isAiDown ? "AI!" : isAiPartial ? "AI" : data.badgeText || "0";
 
     const headlineLine = isAiDown
       ? `AnyRouter：AI 探测失败（${health.description || "未知错误"}）`
       : isAiPartial
         ? "AnyRouter：单条线路异常（其余线路仍可用）"
         : isStale
-          ? "AnyRouter Quota：显示上次成功数据，刷新失败"
+          ? "AnyRouter：显示上次用量，刷新失败"
           : "AnyRouter Quota";
 
     return {
@@ -146,24 +111,35 @@ const getActionState = (snapshot) => {
       tone,
       title: [
         headlineLine,
-        `实时剩余 ${data.formatted.weekRemaining}`,
-        `本周已用 ${data.formatted.weekUsed} / 周限 ${data.formatted.weeklyBudget}`,
-        health && health.state !== "unknown" && health.state !== "disabled" && health.state !== "no-token"
+        `已用额度 ${data.formatted?.used || "-"}`,
+        health && health.state !== "unknown" && health.state !== "no-token"
           ? `AI 状态：${health.label}（${health.metaText}）`
           : "",
         snapshot.updatedAt ? `更新时间 ${new Date(snapshot.updatedAt).toLocaleString("zh-CN")}` : "",
       ]
         .filter(Boolean)
         .join("\n"),
-      ratio: data.status.ratio,
+      ratio: null,
     };
   }
 
-  // 抓取额度失败且无缓存数据：用琥珀色提示，不变红（红色仅用于 AI 告警）
+  // 无缓存余额：仍据 AI 健康优先反映状态（如首次启动余额失败但 AI 已挂，应红/紫而非吞成 ERR）
+  if (isAiDown || isAiPartial) {
+    return {
+      badge: isAiDown ? "AI!" : "AI",
+      tone: isAiDown ? "danger" : "partial",
+      title: isAiDown
+        ? `AnyRouter：AI 探测失败（${health.description || "未知错误"}）`
+        : "AnyRouter：单条线路异常（其余线路仍可用）",
+      ratio: null,
+    };
+  }
+
+  // 查询失败且无缓存余额、AI 也未挂：用琥珀色提示，不变红（红色仅用于 AI 告警）
   return {
     badge: "ERR",
     tone: "stale",
-    title: `AnyRouter Quota：${snapshot.errorMessage || "查询失败"}`,
+    title: `AnyRouter：${snapshot.errorMessage || "查询失败"}`,
     ratio: null,
   };
 };
@@ -250,12 +226,6 @@ const fetchJson = async (url, headers, signal) => {
   return { response, body };
 };
 
-const isAuthFailure = (response, body) => {
-  if (response?.status === 401 || response?.status === 403) return true;
-  const message = (body?.message || "").toString();
-  return /access\s*token|未登录|登录|无权|user.*id|token.*invalid|mismatch/i.test(message);
-};
-
 const showNotification = (id, options) =>
   new Promise((resolve) => {
     try {
@@ -315,12 +285,11 @@ const mergeOne = (prevSub, res, now) => {
   return sub;
 };
 
-// 把本次 probe 结果累加到上次 probeState 上：聚合字段（驱动徽标/通知/重试/放弃）+ 各线路子状态 targets[]。
+// 把本次 probe 结果累加到上次 probeState 上：聚合字段（驱动徽标/通知/重试）+ 各线路子状态 targets[]。
 // 聚合口径「任一线路成功即成功」：成功清零顶层连续失败，全失败才累加——故红色徽标/通知只在两条都挂时触发。
-// probeResult === null 表示本轮没探（关了或没令牌），保留旧状态但更新 enabled。
-const mergeProbeState = (prev, probeResult, enabled, source) => {
+// probeResult === null 表示本轮没探，保留旧状态。
+const mergeProbeState = (prev, probeResult, source) => {
   const base = {
-    enabled: Boolean(enabled),
     lastCheckedAt: Number(prev?.lastCheckedAt) || 0,
     lastSuccessAt: Number(prev?.lastSuccessAt) || 0,
     lastResult: prev?.lastResult || null,
@@ -329,8 +298,6 @@ const mergeProbeState = (prev, probeResult, enabled, source) => {
     consecutiveFailures: Number(prev?.consecutiveFailures) || 0,
     // 各线路子状态：本轮未探测时原样带过上次的，供面板继续展示
     targets: Array.isArray(prev?.targets) ? prev.targets : [],
-    // 本轮未探测（probeResult === null）时清空 source；用于「关闭监测」下手动探测的结果
-    // 在下一次普通刷新后回落到「已关闭」展示
     source: null,
   };
 
@@ -383,23 +350,28 @@ const probeOne = async (config, target) => {
     });
     const latencyMs = Date.now() - startedAt;
 
+    // 先读文本再尝试解析，便于在非 2xx 时把响应体原文带进错误信息（如 400「模型名不被接受」）
+    const raw = await response.text().catch(() => "");
     let payload = null;
     try {
-      payload = await response.json();
+      payload = raw ? JSON.parse(raw) : null;
     } catch {
       payload = null;
     }
 
     if (!response.ok) {
-      const msg =
-        payload?.error?.message ||
-        payload?.message ||
-        `HTTP ${response.status}`;
+      // payload.error 可能是字符串（如 {"error":"1m 上下文…"}）或 {message}
+      const errText = typeof payload?.error === "string" ? payload.error : payload?.error?.message;
+      const detail = errText || payload?.message || raw.slice(0, 120).trim();
+      // 「请启用 1m 上下文」类提示：渠道在线、opus 可用，仅请求未开 1m 上下文；视为可用，避免误报。
+      if (UsageQuota.isReachableProbeError(detail) || UsageQuota.isReachableProbeError(raw)) {
+        return { success: true, latencyMs, errorMessage: "" };
+      }
+      const msg = detail ? `HTTP ${response.status}：${detail}` : `HTTP ${response.status}`;
       return { success: false, latencyMs, errorMessage: msg };
     }
 
-    // OpenAI 兼容格式：返回必须包含 choices；Anthropic 兼容则有 content。
-    // 同时拦截 200 + error 的诡异情况。
+    // OpenAI 兼容格式返回 choices；Anthropic 兼容返回 content。同时拦截 200 + error 的诡异情况。
     if (payload?.error) {
       return {
         success: false,
@@ -436,23 +408,21 @@ const probeOne = async (config, target) => {
 
 // 主动探测：对所有线路（主站 + 大陆直连）并发探测，判断 AI 模型是否真的在响应。
 // 聚合口径：任一线路成功即视为成功；仅当全部线路失败才算失败（驱动徽标/通知/重试）。
-// 返回 successCount（成功线路条数），供活跃度记账按实际计入 request_count 的探测数扣除。
 const probeAi = async (config) => {
   const targets = UsageQuota.PROBE_TARGETS;
 
   if (!UsageQuota.hasValidApiToken(config)) {
     return {
       success: false,
-      successCount: 0,
       latencyMs: 0,
-      errorMessage: "缺少 API 令牌",
+      errorMessage: "缺少 API Key",
       targets: targets.map((t) => ({
         key: t.key,
         name: t.name,
         baseUrl: t.baseUrl,
         success: false,
         latencyMs: 0,
-        errorMessage: "缺少 API 令牌",
+        errorMessage: "缺少 API Key",
       })),
     };
   }
@@ -472,32 +442,25 @@ const probeAi = async (config) => {
   );
 
   const succeeded = results.filter((r) => r.success);
-  const successCount = succeeded.length;
-  const anySuccess = successCount > 0;
+  const anySuccess = succeeded.length > 0;
 
-  // 聚合时延：有成功线路取最快的（用户最关心「最快能多快通」）；全失败取最慢的（更能反映卡顿时长）
+  // 聚合时延：有成功线路取最快的；全失败取最慢的（更能反映卡顿时长）
   const latencyMs = anySuccess
     ? Math.min(...succeeded.map((r) => r.latencyMs))
     : results.reduce((max, r) => Math.max(max, r.latencyMs), 0);
 
-  // 全失败时给聚合错误信息，附一条线路的失败原因作示例
   let errorMessage = "";
   if (!anySuccess) {
     const sample = results.find((r) => r.errorMessage)?.errorMessage || "未知错误";
     errorMessage = `两条线路均失败（示例：${sample}）`;
   }
 
-  return { success: anySuccess, successCount, latencyMs, errorMessage, targets: results };
+  return { success: anySuccess, latencyMs, errorMessage, targets: results };
 };
 
-// 仅在 healthy/unknown/disabled ↔ unhealthy 之间翻转时弹通知，避免每分钟重复打扰
-const maybeNotifyHealth = async (prevHealth, nextHealth, enabled) => {
+// 仅在 healthy/unknown ↔ unhealthy 之间翻转时弹通知，避免每次刷新重复打扰
+const maybeNotifyHealth = async (prevHealth, nextHealth) => {
   if (!nextHealth) return;
-  // 关闭检测（间隔=0）时不弹 AI 通知——手动探测结果只在面板展示；并清掉可能残留的故障通知
-  if (!enabled) {
-    await clearNotification(NOTIFICATION_DOWN_ID);
-    return;
-  }
   const wasDown = prevHealth?.state === "unhealthy";
   const nowDown = nextHealth.state === "unhealthy";
 
@@ -510,7 +473,6 @@ const maybeNotifyHealth = async (prevHealth, nextHealth, enabled) => {
     return;
   }
 
-  // 离开 unhealthy（恢复正常或转为「已关闭」等）都清掉故障通知；仅在确认恢复正常时才弹恢复提示
   if (wasDown && !nowDown) {
     await clearNotification(NOTIFICATION_DOWN_ID);
     if (nextHealth.state === "healthy") {
@@ -522,46 +484,18 @@ const maybeNotifyHealth = async (prevHealth, nextHealth, enabled) => {
   }
 };
 
-// 仅探测：未登录（无 Access Token/用户 ID）或登录失效时，只要配了 API 令牌就单独探测一次站点，
-// 不查额度。结果存成带 health 的快照供面板展示；手动点刷新与按间隔自动监控都走这里。
-const runProbeOnly = async (config, { previous = null, source = "manual" } = {}) => {
-  const healthEnabled = UsageQuota.normalizeHealthEnabled(config);
-  const probeResult = await probeAi(config);
-  const probeState = mergeProbeState(previous?.probeState, probeResult, healthEnabled, source);
-  const health = UsageQuota.computeHealth(probeState, config);
-
-  // 自动监控时 AI 异常/恢复照常通知；监测关闭（间隔=0）时 enabled=false，maybeNotifyHealth 自动不弹
-  const prevHealth = previous?.health || previous?.data?.health || null;
-  await maybeNotifyHealth(prevHealth, health, healthEnabled);
-
-  return setSnapshot({
-    state: "probe-only",
-    updatedAt: Date.now(),
-    errorMessage: "",
-    // 未登录没有额度数据；保留上次额度（若有），但面板在 probe-only 下只展示探测卡片
-    data: previous?.data || null,
-    health,
-    probeState,
-    activityState: previous?.activityState || null,
-  });
-};
-
+// 每个刷新周期：并发拉取已使用额度（计费 usage 接口）与两条线路的 opus 探测。
+// 用量只需 API Key（Bearer）；探测用 x-api-key。两者用同一个 API Key。
 const fetchUsage = async ({ forceProbe = false } = {}) => {
   const config = await getConfig();
   const previous = await getSnapshot();
-
-  // 探测只需 API 令牌：未登录时无活跃/休眠状态，按 healthEnabled（间隔>0）或手动强制判定是否探测
-  const wantProbe =
-    (forceProbe || UsageQuota.normalizeHealthEnabled(config)) && UsageQuota.hasValidApiToken(config);
   const probeSource = forceProbe ? "manual" : "auto";
 
-  if (!UsageQuota.hasValidConfig(config)) {
-    // 未登录但配了 API 令牌：手动/自动都仍探测站点，不卡在「未配置」
-    if (wantProbe) return runProbeOnly(config, { previous, source: probeSource });
+  if (!UsageQuota.hasValidApiToken(config)) {
     return setSnapshot({
       state: "unconfigured",
       updatedAt: null,
-      errorMessage: "请配置 API Key 和用户 ID",
+      errorMessage: "请配置 API Key",
     });
   }
 
@@ -569,143 +503,53 @@ const fetchUsage = async ({ forceProbe = false } = {}) => {
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
   try {
-    const headers = UsageQuota.buildAuthHeaders(config);
-    const { todayStart, nowSec, weekStart } = UsageQuota.computeTimestamps();
+    const billingHeaders = UsageQuota.buildBillingHeaders(config);
+    const usageUrl = UsageQuota.buildBillingUsageUrl();
 
-    const userUrl = UsageQuota.buildUserUrl(config);
-    const dataUrl = UsageQuota.buildDataUrl(config, weekStart, nowSec);
-    const logStatUrl = UsageQuota.buildLogStatUrl(config);
-    const subscriptionUrl = UsageQuota.buildSubscriptionUrl(config);
+    const failedFetch = { response: { ok: false, status: 0 }, body: null };
+    const [usageRes, probeResult] = await Promise.all([
+      fetchJson(usageUrl, billingHeaders, controller.signal).catch(() => failedFetch),
+      probeAi(config),
+    ]);
 
-    // /api/user/self 是关键，先单独发以便处理鉴权失败
-    const { response: userRes, body: userBody } = await fetchJson(userUrl, headers, controller.signal);
+    // 健康（探测结果）。health 顶层冗余存一份：用量失败导致 data 为空时，图标/通知仍能据此反映 AI 状态。
+    const probeState = mergeProbeState(previous?.probeState, probeResult, probeSource);
+    const health = UsageQuota.computeHealth(probeState, config);
+    await maybeNotifyHealth(previous?.health || previous?.data?.health, health);
 
-    if (isAuthFailure(userRes, userBody)) {
-      // 登录令牌失效：额度查不了，但有 API 令牌时仍探测站点，避免「登录过期连检测都用不了」
-      if (wantProbe) return runProbeOnly(config, { previous, source: probeSource });
-      return setSnapshot({
-        state: "unconfigured",
-        updatedAt: null,
-        errorMessage: userBody?.message || "API Key 或用户 ID 无效",
+    // 已使用额度（计费接口）：令牌为无限额度时拿不到剩余余额，故展示已用。失败不当 0（见 extractUsed）。
+    const usage = UsageQuota.extractUsed(usageRes.body, Boolean(usageRes.response?.ok));
+
+    let result;
+    if (usage.isValid) {
+      result = await setSnapshot({
+        state: "ready",
+        updatedAt: Date.now(),
+        errorMessage: "",
+        data: { ...usage, health },
+        health,
+        probeState,
+      });
+    } else {
+      // 用量拿不到：保留上次用量展示为 stale，但健康按本轮探测更新（AI 异常仍能正确告警染红）
+      const staleData = previous?.data ? { ...previous.data, health } : null;
+      result = await setSnapshot({
+        state: staleData ? "stale" : "error",
+        updatedAt: previous?.updatedAt || null,
+        failedAt: Date.now(),
+        errorMessage: usage.invalidMessage || "用量查询失败",
+        data: staleData,
+        health,
+        probeState,
       });
     }
 
-    if (!userRes.ok || !userBody?.success) {
-      throw new Error(userBody?.message || `HTTP ${userRes.status}`);
-    }
-
-    // 被动活跃判定：anyrouter 累计 request_count 是否增长（已在 decideActivityMode 内扣除自己的成功探测）
-    // 决定你是否真的在用 AI；据此门控探测、并在你离开 ~30min 后转入休眠。
-    const totalRequestCount = UsageQuota.toNumber(userBody.data?.request_count);
-    const prevActivity = previous?.activityState || {};
-    const activity = UsageQuota.decideActivityMode(prevActivity, totalRequestCount, {
-      now: Date.now(),
-      forcePresent: forceProbe, // 手动刷新视为你在场
-    });
-
-    // 其他三个接口并发查询，单个失败不致命
-    const fetchOptional = async (url) => {
-      try {
-        const { response, body } = await fetchJson(url, headers, controller.signal);
-        if (!response.ok) return null;
-        return body;
-      } catch (error) {
-        return null;
-      }
-    };
-
-    // 与额度接口同 tick 主动探测 AI 健康。
-    // 自动探测仅在「开启监测 且 处于活跃」时进行；手动点刷新（forceProbe）无视监测开关与休眠，强制探一次。
-    const healthEnabled = UsageQuota.normalizeHealthEnabled(config);
-    const shouldProbe =
-      ((healthEnabled && activity.mode === "active") || forceProbe) && UsageQuota.hasValidApiToken(config);
-    const probePromise = shouldProbe ? probeAi(config) : Promise.resolve(null);
-
-    const [dataBody, logStatBody, subscriptionBody, probeResult] = await Promise.all([
-      fetchOptional(dataUrl),
-      fetchOptional(logStatUrl),
-      fetchOptional(subscriptionUrl),
-      probePromise,
-    ]);
-
-    const data = UsageQuota.extractUsage({
-      userResponse: userBody,
-      dataResponse: dataBody,
-      logStatResponse: logStatBody,
-      subscriptionResponse: subscriptionBody,
-    });
-
-    if (!data.isValid) {
-      throw new Error(data.invalidMessage);
-    }
-
-    // 滚动更新 probeState（基于上次 + 本次结果）
-    const prevProbe = previous?.probeState || {};
-    const probeState = mergeProbeState(prevProbe, probeResult, healthEnabled, probeSource);
-    data.health = UsageQuota.computeHealth(probeState, config);
-
-    // 滚动维护活跃状态。成功探测会被平台计入 request_count，故按累计成功探测数扣除，避免探测把自己喂成「活跃」。
-    let activityState;
-    if (activity.mode === "dormant") {
-      // 进入/保持休眠：以当前原始 request_count 为基线、探测账清零。休眠期不探测，
-      // 于是「你是否回来」纯看原始请求数增长（无探测干扰）——彻底杜绝长期累计漂移把人卡死在休眠。
-      activityState = {
-        baselined: true,
-        lastUserRequestCount: totalRequestCount,
-        successfulProbeTotal: 0,
-        lastActivityAt: activity.lastActivityAt,
-        mode: "dormant",
-      };
-    } else {
-      activityState = {
-        baselined: true,
-        lastUserRequestCount: activity.nextLastUserRequestCount,
-        successfulProbeTotal:
-          UsageQuota.toNumber(prevActivity.successfulProbeTotal) +
-          (probeResult ? UsageQuota.toNumber(probeResult.successCount) : 0),
-        lastActivityAt: activity.lastActivityAt,
-        mode: "active",
-      };
-    }
-
-    const snapshot = {
-      state: "ready",
-      updatedAt: Date.now(),
-      errorMessage: "",
-      data,
-      probeState,
-      activityState,
-    };
-    await maybeNotifyHealth(previous?.data?.health, data.health, healthEnabled);
-    const result = await setSnapshot(snapshot);
-
-    // 周期可能因失败次数或活跃/休眠切换而变化（正常 ↔ 3min ↔ 休眠心跳 ↔ 停），重排 alarm
-    const prevPeriod = UsageQuota.getEffectiveRefreshMinutes(config, previous?.probeState, previous?.activityState);
-    const nowPeriod = UsageQuota.getEffectiveRefreshMinutes(config, probeState, activityState);
-    if (prevPeriod !== nowPeriod) {
-      await scheduleRefresh({ immediate: false });
-    }
-
+    await rescheduleIfNeeded(previous, probeState);
     return result;
   } catch (error) {
     const message =
-      error?.name === "AbortError" ? "请求超时，请检查平台地址或网络" : error?.message || "查询失败";
+      error?.name === "AbortError" ? "请求超时，请检查网络" : error?.message || "查询失败";
     const staleData = previous?.data || null;
-
-    // 额度查询失败时，若需要探测（手动点刷新，或开启监测）仍单独探一次——
-    // 额度故障常与 AI 真实故障同时发生，正是最需要准确探测结果的时候；点刷新也能刷新探测时间。
-    // 不需要探测时（无 API 令牌 / 监测关且非手动）按原逻辑传 null：让旧的手动探测结果回落、避免红色徽标卡死。
-    const healthEnabled = UsageQuota.normalizeHealthEnabled(config);
-    const probeResult = wantProbe ? await probeAi(config) : null;
-    const probeState = mergeProbeState(previous?.probeState, probeResult, healthEnabled, probeSource);
-    const health = UsageQuota.computeHealth(probeState, config);
-    if (staleData) staleData.health = health;
-    // health 据本轮探测结果重算；据此触发/清掉故障通知（即便没有旧额度数据也能正确告警）
-    await maybeNotifyHealth(previous?.data?.health || previous?.health, health, healthEnabled);
-
-    // 刷新失败写入快照供弹窗展示。本轮若实际探测了（probeResult 非空），AI 健康可能已变化
-    // （如线路恢复），必须重绘工具栏徽标，否则旧的红色「AI!」会卡死、线路恢复后警示不消失。
-    // 未探测（无新健康信息）时维持原样，避免纯额度故障无谓改动工具栏。
     return setSnapshot(
       {
         state: staleData ? "stale" : "error",
@@ -713,78 +557,17 @@ const fetchUsage = async ({ forceProbe = false } = {}) => {
         failedAt: Date.now(),
         errorMessage: message,
         data: staleData,
-        probeState,
-        // 抓取失败但仍探测了（catch 路径不知是否休眠，按 wantProbe 探）：探测同样被平台计入
-        // request_count，必须把本轮成功探测数累加进 successfulProbeTotal，否则下个 tick 会把这些
-        // 探测请求误读成「用户在用 AI」、反复刷新 lastActivityAt 而把人永久卡在「活跃」、永不休眠。
-        // 全失败时 successCount=0 即原样保留；未探测（probeResult 为 null）时也原样保留，下个 tick 再判定。
-        activityState: probeResult
-          ? {
-              ...(previous?.activityState || {}),
-              successfulProbeTotal:
-                UsageQuota.toNumber(previous?.activityState?.successfulProbeTotal) +
-                UsageQuota.toNumber(probeResult.successCount),
-            }
-          : previous?.activityState,
+        health: previous?.health || previous?.data?.health || null,
+        probeState: previous?.probeState || {},
       },
-      { renderActionState: Boolean(probeResult) }
+      { renderActionState: true }
     );
   } finally {
     clearTimeout(timeout);
   }
 };
 
-// 休眠心跳：只读 anyrouter 的 request_count（最轻量、免费、绝不探测），用来发现你是否回来用 AI。
-// 真实请求数一旦增长 → 立即整刷一次（含探测）并把 alarm 调回正常间隔；否则保持休眠、不动面板。
-const dormantHeartbeat = async () => {
-  const config = await getConfig();
-  if (!UsageQuota.hasValidConfig(config)) return;
-  const previous = await getSnapshot();
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const headers = UsageQuota.buildAuthHeaders(config);
-    const userUrl = UsageQuota.buildUserUrl(config);
-    const { response, body } = await fetchJson(userUrl, headers, controller.signal);
-    // 心跳失败（网络/鉴权波动）：保持休眠，下个心跳再试，不动面板也不报错
-    if (!response.ok || !body?.success) return;
-
-    const totalRequestCount = UsageQuota.toNumber(body.data?.request_count);
-    const activity = UsageQuota.decideActivityMode(previous?.activityState || {}, totalRequestCount, {
-      now: Date.now(),
-    });
-
-    if (activity.mode === "active") {
-      // 你回来了：整刷一次。fetchUsage 会独立从 request_count 复算活跃状态、按需探测并把 alarm 调回正常间隔。
-      await fetchUsage();
-    }
-    // 仍休眠：活跃状态无实质变化（无新请求、无探测），无需写回快照，保持上次额度展示
-  } catch (error) {
-    // 心跳异常：忽略，保持休眠
-  } finally {
-    clearTimeout(timeout);
-  }
-};
-
-// 一次性迁移：旧版的 healthEnabled 开关已并入「刷新间隔」。把显式关闭过检测的旧配置
-// 迁移成 refreshMinutes=0，避免升级后自动检测被意外打开；并清掉废弃的 healthEnabled 字段。
-const migrateConfig = async () => {
-  const config = await getConfig();
-  if (!("healthEnabled" in config)) return;
-  const wasDisabled =
-    config.healthEnabled === false ||
-    config.healthEnabled === "false" ||
-    config.healthEnabled === 0 ||
-    config.healthEnabled === "0";
-  const next = { ...config };
-  delete next.healthEnabled;
-  if (wasDisabled) next.refreshMinutes = 0;
-  await storageSet({ [UsageQuota.CONFIG_KEY]: next });
-};
-
 chrome.runtime.onInstalled.addListener(async () => {
-  await migrateConfig();
   await scheduleRefresh();
   await fetchUsage();
 });
@@ -798,18 +581,12 @@ chrome.runtime.onStartup.addListener(async () => {
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== ALARM_NAME) return;
-  // 休眠期只跑轻量心跳（只读 request_count）；活跃期正常整刷 + 探测
-  const snapshot = await getSnapshot();
-  if (snapshot?.activityState?.mode === "dormant") {
-    await dormantHeartbeat();
-  } else {
-    await fetchUsage();
-  }
+  await fetchUsage();
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "refreshUsage") {
-    // 来自弹窗刷新按钮的请求带 forceProbe，强制探测一次（无视监测开关）
+    // 来自弹窗刷新按钮的请求带 forceProbe，强制探测一次
     fetchUsage({ forceProbe: Boolean(message.forceProbe) }).then(sendResponse);
     return true;
   }
