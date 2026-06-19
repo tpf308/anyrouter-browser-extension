@@ -359,29 +359,29 @@ const probeModel = async (config, target, model) => {
       payload = null;
     }
 
-    // 429 = 活通道在线但被限流（达到速率/额度上限），opus-4-8 本身可用，不算「挂」
-    if (response.status === 429) {
-      return { success: true, latencyMs, errorMessage: "" };
+    // ① 响应体是 JSON 错误：new-api 把「上游不可用」包成 {"type":"error","error":{message}}，
+    //    且常以 429（甚至 200）返回——这恰是「opus 实测用不了」的信号，优先级高于状态码。
+    //    （实测主站/直连不可用时即回 429 + {"message":"Service Unavailable"}；429 绝不能当「可用」。）
+    const jsonErr =
+      typeof payload?.error === "string" ? payload.error : payload?.error?.message;
+    if (jsonErr) {
+      return { success: false, latencyMs, errorMessage: `HTTP ${response.status}：${jsonErr}` };
     }
 
+    // ② 非 2xx 且无法解析出错误详情：带状态码与响应体片段报失败（从严）。
     if (!response.ok) {
-      // payload.error 可能是字符串（如 {"error":"…"}）或 {message}；任何非 2xx 一律按失败处理（从严）
-      const errText = typeof payload?.error === "string" ? payload.error : payload?.error?.message;
-      const detail = errText || payload?.message || raw.slice(0, 120).trim();
+      const detail = raw.slice(0, 120).trim();
       const msg = detail ? `HTTP ${response.status}：${detail}` : `HTTP ${response.status}`;
       return { success: false, latencyMs, errorMessage: msg };
     }
 
-    // 探测用 stream:true，2xx 的响应体是 SSE 流（非 JSON）。拿到 2xx 即说明活通道已响应、
-    // opus-4-8 可用——不再强求解析 content。仅当响应体竟是 JSON 且夹带 error 时才判失败。
-    if (payload?.error) {
-      return {
-        success: false,
-        latencyMs,
-        errorMessage: payload.error?.message || "模型返回错误",
-      };
+    // ③ 探测用 stream:true，2xx 的正常响应体是 SSE 流。若流里夹了 error 事件
+    //    （活通道先回 200、上游随后挂掉），也判失败——成功的 "hi" 回复不会含此 JSON 片段。
+    if (/"type"\s*:\s*"error"/.test(raw)) {
+      return { success: false, latencyMs, errorMessage: "上游在流中返回 error 事件" };
     }
 
+    // ④ 2xx 且全程无 error → 活通道真的在吐 opus-4-8，可用。
     return { success: true, latencyMs, errorMessage: "" };
   } catch (error) {
     const latencyMs = Date.now() - startedAt;

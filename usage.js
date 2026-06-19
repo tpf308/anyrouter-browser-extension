@@ -19,11 +19,12 @@
   //   2) 1m 上下文 beta 头 context-1m-2025-08-07（见 buildProbeHeaders）；
   //   3) body 带 metadata.user_id（device/session 结构，值可任意，只校验格式）；
   //   4) system 首块为 CC 计费头标记、次块为 CC 身份行（见下两常量）；
-  //   5) body 带 stream:true（实测非流式会间歇性触发上游 520，流式稳定回 200/429）。
+  //   5) body 带 stream:true（实测非流式会间歇性触发上游 520；流式下：可用回 200+SSE，不可用回 429 错误体）。
   // 因此探测「伪装成 Claude Code」——这样它走的正是用户真实 CC 走的那条通道，
-  // 结果与用户的真实可用性一致：opus 对 CC 可用 → 200(绿)；连 CC 都用不了 → 非 200(红)。
-  // 判定（见 background.js probeModel）：200 与 429（活通道在线，429=限流但可用）视为正常；
-  // 503 / 400 / 其它非 2xx / 网络错视为异常。
+  // 结果与用户的真实可用性一致：opus 对 CC 可用 → 200+SSE(绿)；连 CC 都用不了 → 错误(红)。
+  // 判定（见 background.js probeModel）：HTTP 200 且 SSE 流内无 error 事件 = 可用(绿)；
+  // 响应体含 error 才算异常——new-api 把「上游不可用」包成 {"type":"error",...} 且常以 429 返回
+  //（实测不可用时回 429 + "Service Unavailable"），故 429 不能当「可用」；其它非 2xx / 网络错亦为异常(红)。
   const PROBE_TARGET_MODEL = "claude-opus-4-8";
   const PROBE_ANTHROPIC_BETA = "context-1m-2025-08-07";
   const PROBE_MAX_TOKENS = 16;
