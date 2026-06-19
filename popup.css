@@ -234,7 +234,62 @@ body.modal-open { min-height: 180px; }
 
 .status-note[hidden] { display: none; }
 
-.toolbar { display: flex; gap: 2px; flex-shrink: 0; }
+.toolbar { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+
+/* 自动刷新开关：紧凑滑动 toggle，开启时品牌青绿 */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.switch-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.switch-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switch-track {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: background 160ms;
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+  transition: transform 160ms;
+}
+
+.switch-input:checked + .switch-track { background: var(--brand); }
+.switch-input:checked + .switch-track .switch-thumb { transform: translateX(12px); }
+.switch:hover .switch-track { filter: brightness(0.97); }
+.switch-input:focus-visible + .switch-track {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
 
 .icon-btn {
   display: grid;

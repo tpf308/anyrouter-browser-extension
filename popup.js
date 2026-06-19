@@ -3,6 +3,7 @@ const $ = (id) => document.getElementById(id);
 const el = {
   alertBox:       $("alertBox"),
   apiKeyInput:    $("apiKeyInput"),
+  autoRefreshToggle: $("autoRefreshToggle"),
   cancelKeyBtn:   $("cancelKeyBtn"),
   configForm:     $("configForm"),
   emptyState:     $("emptyState"),
@@ -134,7 +135,14 @@ const renderHealthTargets = (health) => {
   }
 };
 
+// 顶栏自动刷新开关同步到当前持久化配置（旧配置无字段 → 默认开启）
+const setAutoRefreshToggle = (config) => {
+  el.autoRefreshToggle.checked = UsageQuota.isAutoRefreshEnabled(config);
+};
+
 const renderSnapshot = (snapshot, config) => {
+  setAutoRefreshToggle(config);
+
   // 未配置 API Key
   if (!UsageQuota.hasValidApiToken(config) || snapshot?.state === "unconfigured") {
     renderUnconfigured(snapshot?.errorMessage || "");
@@ -212,10 +220,21 @@ el.configForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  await storageSet({ [UsageQuota.CONFIG_KEY]: { apiToken: apiKey } });
+  // 合并保存：保留 autoRefresh 等其它字段，只覆盖 apiToken
+  const prevResult = await storageGet(UsageQuota.CONFIG_KEY);
+  const prevConfig = prevResult[UsageQuota.CONFIG_KEY] || {};
+  await storageSet({ [UsageQuota.CONFIG_KEY]: { ...prevConfig, apiToken: apiKey } });
   closeKeyModal();
   showAlert("");
   await refreshUsage();
+});
+
+// 自动刷新开关：写入配置即可——background 的 storage.onChanged 会据此重排/清除周期 alarm
+el.autoRefreshToggle.addEventListener("change", async () => {
+  const enabled = el.autoRefreshToggle.checked;
+  const result = await storageGet(UsageQuota.CONFIG_KEY);
+  const config = result[UsageQuota.CONFIG_KEY] || {};
+  await storageSet({ [UsageQuota.CONFIG_KEY]: { ...config, autoRefresh: enabled } });
 });
 
 // 点刷新按钮：强制立即探测一次运行状况（不必等内置的 5 分钟周期）

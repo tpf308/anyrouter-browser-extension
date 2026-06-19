@@ -81,6 +81,10 @@
   // 精简后凭据只剩单个 API Key：配置有效 == 有 API Key
   const hasValidConfig = (config) => hasValidApiToken(config);
 
+  // 自动刷新（后台 alarm 周期探测）总开关：默认开启；仅当显式存为 false 才关闭。
+  // 关闭后不排周期 alarm，只能点刷新按钮手动探测（旧配置无此字段 → 视为开启，行为不变）。
+  const isAutoRefreshEnabled = (config) => config?.autoRefresh !== false;
+
   // 计费接口鉴权：Authorization: Bearer <API Key>（TokenAuth 会剥掉 Bearer/sk- 前缀按令牌查用户）
   const buildBillingHeaders = (config) => ({
     Authorization: `Bearer ${normalizeApiToken(config?.apiToken)}`,
@@ -315,6 +319,7 @@
     hasValidApiToken,
     hasValidConfig,
     hostOf,
+    isAutoRefreshEnabled,
     normalizeApiToken,
     toNumber,
     toNumberOrNull,

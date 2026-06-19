@@ -46,6 +46,12 @@ const setSnapshot = async (snapshot, { renderActionState = true } = {}) => {
 };
 
 const scheduleRefresh = async ({ immediate = true } = {}) => {
+  const config = await getConfig();
+  // 自动刷新开关关闭：不排周期 alarm，仅保留手动刷新（点刷新按钮）
+  if (!UsageQuota.isAutoRefreshEnabled(config)) {
+    chrome.alarms.clear(ALARM_NAME);
+    return;
+  }
   const snapshot = await getSnapshot();
   const periodMinutes = UsageQuota.getEffectiveRefreshMinutes(snapshot?.probeState);
   // null = 「放弃」档：清掉 alarm，等用户手动点刷新

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AnyRouter Quota Monitor",
-  "version": "2.2.2",
+  "version": "2.3.0",
   "description": "在 Chrome 工具栏展示 AnyRouter 已使用额度，并主动探测 claude-opus-4-8 健康状态（主站 + 大陆直连双线路）。仅需一个 API Key。",
   "minimum_chrome_version": "110",
   "icons": {
