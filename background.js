@@ -330,11 +330,11 @@ const mergeProbeState = (prev, probeResult, source) => {
   return base;
 };
 
-// 探测单条线路：发一个最小请求到该线路的 /v1/messages，判断 AI 模型是否真的在响应。
-const probeOne = async (config, target) => {
+// 探测单个模型：发一个最小请求到该线路的 /v1/messages，判断该模型是否真的在响应。
+const probeModel = async (config, target, model) => {
   const url = UsageQuota.buildProbeUrl(target.baseUrl);
   const headers = UsageQuota.buildProbeHeaders(config);
-  const body = UsageQuota.buildProbeBody(UsageQuota.PROBE_MODEL);
+  const body = UsageQuota.buildProbeBody(model);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), UsageQuota.PROBE_TIMEOUT_MS);
@@ -359,34 +359,26 @@ const probeOne = async (config, target) => {
       payload = null;
     }
 
+    // 429 = 活通道在线但被限流（达到速率/额度上限），opus-4-8 本身可用，不算「挂」
+    if (response.status === 429) {
+      return { success: true, latencyMs, errorMessage: "" };
+    }
+
     if (!response.ok) {
-      // payload.error 可能是字符串（如 {"error":"1m 上下文…"}）或 {message}
+      // payload.error 可能是字符串（如 {"error":"…"}）或 {message}；任何非 2xx 一律按失败处理（从严）
       const errText = typeof payload?.error === "string" ? payload.error : payload?.error?.message;
       const detail = errText || payload?.message || raw.slice(0, 120).trim();
-      // 「请启用 1m 上下文」类提示：渠道在线、opus 可用，仅请求未开 1m 上下文；视为可用，避免误报。
-      if (UsageQuota.isReachableProbeError(detail) || UsageQuota.isReachableProbeError(raw)) {
-        return { success: true, latencyMs, errorMessage: "" };
-      }
       const msg = detail ? `HTTP ${response.status}：${detail}` : `HTTP ${response.status}`;
       return { success: false, latencyMs, errorMessage: msg };
     }
 
-    // OpenAI 兼容格式返回 choices；Anthropic 兼容返回 content。同时拦截 200 + error 的诡异情况。
+    // 探测用 stream:true，2xx 的响应体是 SSE 流（非 JSON）。拿到 2xx 即说明活通道已响应、
+    // opus-4-8 可用——不再强求解析 content。仅当响应体竟是 JSON 且夹带 error 时才判失败。
     if (payload?.error) {
       return {
         success: false,
         latencyMs,
         errorMessage: payload.error?.message || "模型返回错误",
-      };
-    }
-
-    const hasChoices = Array.isArray(payload?.choices) && payload.choices.length > 0;
-    const hasContent = Array.isArray(payload?.content) && payload.content.length > 0;
-    if (!hasChoices && !hasContent) {
-      return {
-        success: false,
-        latencyMs,
-        errorMessage: "响应格式异常，未返回模型输出",
       };
     }
 
@@ -429,7 +421,7 @@ const probeAi = async (config) => {
 
   const results = await Promise.all(
     targets.map(async (t) => {
-      const r = await probeOne(config, t);
+      const r = await probeModel(config, t, UsageQuota.PROBE_TARGET_MODEL);
       return {
         key: t.key,
         name: t.name,

@@ -9,10 +9,27 @@
   const BILLING_USAGE_QUERY = "start_date=2024-01-01&end_date=2026-12-31";
   // 探测专用后端：大陆网络优化直连地址
   const PROBE_BASE_URL = "https://a-ocnfniawgw.cn-shanghai.fcapp.run";
-  // 探测模型固定用 claude-opus-4-8——即用户实际使用的模型。早期用 claude-haiku-4-5 探测时，
-  // 遇到 opus 线路不可用、但 haiku 仍能响应的情况，探测会误报「站点正常」；改用 opus 后，
-  // 探测结果与用户真实可用性一致。每次探测为 max_tokens:1 的最小请求，单次开销极小。
-  const PROBE_MODEL = "claude-opus-4-8";
+  // 探测目标模型：用户实际使用的 claude-opus-4-8。
+  //
+  // 关键背景（经抓包逆向）：anyrouter 把 /v1/messages 分成两条上游——
+  //   · 「活通道」(opus-4-8 真能用)：只接收「看起来像 Claude Code」的请求；
+  //   · 「死通道」：其它请求一律回 503。
+  // 要落到活通道，必须同时满足（缺一即 503）：
+  //   1) URL 带 ?beta=true（见 buildProbeUrl）；
+  //   2) 1m 上下文 beta 头 context-1m-2025-08-07（见 buildProbeHeaders）；
+  //   3) body 带 metadata.user_id（device/session 结构，值可任意，只校验格式）；
+  //   4) system 首块为 CC 计费头标记、次块为 CC 身份行（见下两常量）；
+  //   5) body 带 stream:true（实测非流式会间歇性触发上游 520，流式稳定回 200/429）。
+  // 因此探测「伪装成 Claude Code」——这样它走的正是用户真实 CC 走的那条通道，
+  // 结果与用户的真实可用性一致：opus 对 CC 可用 → 200(绿)；连 CC 都用不了 → 非 200(红)。
+  // 判定（见 background.js probeModel）：200 与 429（活通道在线，429=限流但可用）视为正常；
+  // 503 / 400 / 其它非 2xx / 网络错视为异常。
+  const PROBE_TARGET_MODEL = "claude-opus-4-8";
+  const PROBE_ANTHROPIC_BETA = "context-1m-2025-08-07";
+  const PROBE_MAX_TOKENS = 16;
+  // 落到活通道所需的 CC 签名（实测只校验格式、不校验具体值；cc_version 用一个真实近期版本即可）
+  const PROBE_BILLING_SYSTEM = "x-anthropic-billing-header: cc_version=2.1.183; cc_entrypoint=cli;";
+  const PROBE_CLI_SYSTEM = "You are Claude Code, Anthropic's official CLI for Claude.";
   // 探测线路清单：主站与大陆直连后端各探一次，两条结果都展示。
   const PROBE_TARGETS = [
     { key: "main", name: "主站", baseUrl: ANYROUTER_BASE_URL }, // https://anyrouter.top
@@ -72,34 +89,47 @@
   const buildBillingUsageUrl = () =>
     new URL(`${BILLING_USAGE_PATH}?${BILLING_USAGE_QUERY}`, ANYROUTER_BASE_URL).toString();
 
-  // 按给定 baseUrl 拼探测端点（/v1/messages）；缺省回退大陆优化后端
-  const buildProbeUrl = (baseUrl) => new URL(PROBE_PATH, baseUrl || PROBE_BASE_URL).toString();
+  // 按给定 baseUrl 拼探测端点：/v1/messages?beta=true（?beta=true 是落到活通道的必要条件之一）
+  const buildProbeUrl = (baseUrl) =>
+    new URL(`${PROBE_PATH}?beta=true`, baseUrl || PROBE_BASE_URL).toString();
 
-  // AnyRouter 是 Anthropic 协议代理，探测使用 /v1/messages + x-api-key。
-  // 注意：不带 1m 上下文 beta 头——带上会被路由到后端当前 503 的「1m 上下文」渠道；
-  // 不带则普通渠道在线，仅回 400「请启用 1m 上下文」提示（见 isReachableProbeError）。
+  // 探测鉴权用 x-api-key（与计费接口同一个 API Key）。anthropic-beta 带 1m 上下文，
+  // 配合 ?beta=true 与 body 里的 CC 签名，才能落到 opus-4-8 的活通道（详见 PROBE_TARGET_MODEL 注释）。
   const buildProbeHeaders = (config) => ({
     "x-api-key": normalizeApiToken(config?.apiToken),
     "anthropic-version": PROBE_ANTHROPIC_VERSION,
+    "anthropic-beta": PROBE_ANTHROPIC_BETA,
     "Content-Type": "application/json",
     Accept: "application/json",
   });
 
+  // 生成随机 64 位 hex 作设备指纹占位（活通道只校验 metadata 格式、不校验具体值）
+  const randomHex = (len) => {
+    const bytes = new Uint8Array(len / 2);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  };
+
+  // 探测请求体：伪装成 Claude Code，以落到 opus-4-8 的活通道（见 PROBE_TARGET_MODEL 注释）。
+  // 消息仅 "hi"、max_tokens 16，模型只回几个 token，单次开销极小。stream:true 必须带（见上注释第 5 条）。
   const buildProbeBody = (model) =>
     JSON.stringify({
-      model: model || PROBE_MODEL,
-      max_tokens: 1,
+      model: model || PROBE_TARGET_MODEL,
+      max_tokens: PROBE_MAX_TOKENS,
+      stream: true,
+      system: [
+        { type: "text", text: PROBE_BILLING_SYSTEM },
+        { type: "text", text: PROBE_CLI_SYSTEM },
+      ],
+      metadata: {
+        user_id: JSON.stringify({
+          device_id: randomHex(64),
+          account_uuid: "",
+          session_id: crypto.randomUUID(),
+        }),
+      },
       messages: [{ role: "user", content: "hi" }],
     });
-
-  // 后端对 opus-4-8 返回「请启用 1m 上下文后重试」属于请求参数层面的拒绝：渠道在线、opus 可用，
-  // 只是这条请求没开 1m 上下文（与此同时用户的 Claude Code 正常可用）。真正不可用时 new-api 返回的是
-  // 「无可用渠道」，二者语义不同。因此识别到该提示即视为「可用」，避免误报 AI 异常。
-  // 风险：依赖后端文案；若后端改词可能回退为误报（偏保守，倾向暴露问题），届时更新此处即可。
-  const PROBE_REACHABLE_DESPITE_ERROR = [/1m\s*上下文/i, /1m\s*context/i];
-  const isReachableProbeError = (message) =>
-    typeof message === "string" &&
-    PROBE_REACHABLE_DESPITE_ERROR.some((re) => re.test(message));
 
   // 根据聚合探测的连续失败次数挑选刷新周期：
   //   连续失败 ≥ 40 次 → null（停自动探测，等手动刷新）
@@ -263,7 +293,7 @@
     DEFAULT_REFRESH_MINUTES,
     GIVE_UP_FAILURE_COUNT,
     PROBE_BASE_URL,
-    PROBE_MODEL,
+    PROBE_TARGET_MODEL,
     PROBE_PATH,
     PROBE_TARGETS,
     PROBE_TIMEOUT_MS,
@@ -284,7 +314,6 @@
     hasValidApiToken,
     hasValidConfig,
     hostOf,
-    isReachableProbeError,
     normalizeApiToken,
     toNumber,
     toNumberOrNull,
