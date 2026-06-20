@@ -79,6 +79,8 @@
         <!-- AI 健康状态卡片：逐条展示各线路（主站 / 大陆直连），由 popup.js 动态填充 -->
         <div class="health" id="healthCard">
           <div class="health-targets" id="healthTargets"></div>
+          <!-- 探测方式：native=本地 host（准确）/ fetch=浏览器（可能假 429），由 popup.js 填充 -->
+          <div class="probe-via" id="probeVia" hidden></div>
         </div>
       </section>
 

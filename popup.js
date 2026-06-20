@@ -9,6 +9,7 @@ const el = {
   emptyState:     $("emptyState"),
   healthCard:     $("healthCard"),
   healthTargets:  $("healthTargets"),
+  probeVia:       $("probeVia"),
   keyModal:       $("keyModal"),
   openKeyBtn:     $("openKeyBtn"),
   refreshButton:  $("refreshButton"),
@@ -140,6 +141,19 @@ const setAutoRefreshToggle = (config) => {
   el.autoRefreshToggle.checked = UsageQuota.isAutoRefreshEnabled(config);
 };
 
+// 探测方式提示：native（本地 host）准确；fetch（浏览器）可能假 429，提示去装本地探测。
+const setProbeVia = (snapshot) => {
+  if (!el.probeVia) return;
+  const via = snapshot?.probeState?.probeVia;
+  if (via === "native" || via === "fetch") {
+    el.probeVia.hidden = false;
+    el.probeVia.dataset.via = via;
+    el.probeVia.textContent = via === "native" ? "本地探测 ✓" : "浏览器探测 · 装本地探测更准";
+  } else {
+    el.probeVia.hidden = true;
+  }
+};
+
 const renderSnapshot = (snapshot, config) => {
   setAutoRefreshToggle(config);
 
@@ -173,6 +187,7 @@ const renderSnapshot = (snapshot, config) => {
   showAlert("");
 
   renderHealthTargets(health);
+  setProbeVia(snapshot);
 };
 
 const loadState = async () => {

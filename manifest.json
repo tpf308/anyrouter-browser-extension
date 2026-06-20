@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "AnyRouter Quota Monitor",
-  "version": "2.3.0",
-  "description": "在 Chrome 工具栏展示 AnyRouter 已使用额度，并主动探测 claude-opus-4-8 健康状态（主站 + 大陆直连双线路）。仅需一个 API Key。",
+  "version": "2.4.0",
+  "description": "在 Chrome 工具栏展示 AnyRouter 已使用额度，并主动探测 claude-opus-4-8 健康状态（主站 + 大陆直连双线路）。仅需一个 API Key。可选本地探测：用真实 Claude Code 请求探活，根治浏览器 fetch 的假 429。",
   "minimum_chrome_version": "110",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq51NHzOWw4mpvkD5ULauMLLrfCb/8Ka3c+1bs0xzq3TbBR5xAMP9QQ2CdU6V98X2BE9XoGftdAT63fWGv1+0mUljNddlWnqlrj/kja7U8IU6lzgiPoVmyk2RKzY0/5TsApJ14haDcT0sMj21hmqajZi5tvTWhnEQcZCwwXnJnaqsyB3RqQqsvtlqPu0RlUB038i6SAU5yZjeDaQx0jEjnQmIJpoIx7udGp8EEjL8Nsrsn+VHgju/B8mGOogFeOIE3vyWhrxRX4Nx7myLSrmW0A3PsP08L+emmjX+IKPWI6yTzpVk+Qr0RJ3t4AudYMxRX9efVP2ZwIob1mpYHITXgwIDAQAB",
   "icons": {
     "16": "icon16.png",
     "32": "icon32.png",
@@ -26,7 +27,8 @@
   "permissions": [
     "alarms",
     "notifications",
-    "storage"
+    "storage",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "https://anyrouter.top/*",

@@ -38,6 +38,10 @@
   ];
   const PROBE_ANTHROPIC_VERSION = "2023-06-01";
   const PROBE_TIMEOUT_MS = 15000;
+  // 本地探测原生消息 host 名（须与 native-host 清单 "name" 及注册表键名一致）。
+  // 浏览器 fetch 改不了 User-Agent，host 用 curl 发请求才能带上真实 CC 的 UA、命中活通道。
+  const NATIVE_HOST_NAME = "com.anyrouter.probe";
+  const PROBE_USER_AGENT = "claude-cli/2.1.183 (external, cli)";
   const CONFIG_KEY = "anyrouterQuotaConfig";
   const SNAPSHOT_KEY = "anyrouterQuotaSnapshot";
 
@@ -135,6 +139,43 @@
       },
       messages: [{ role: "user", content: "hi" }],
     });
+
+  // 本地探测请求规格：交给原生 host（PowerShell + curl）执行的「完整请求描述」。
+  // 与浏览器 fetch 探测同源同签名，但额外带上 fetch 改不了的 user-agent（claude-cli）与 x-app，
+  // 使请求与真实 Claude Code 一致、命中活通道。各 target 的代理由 host 本地 probe-config.json 决定，
+  // 机器相关、扩展不掺和；host 按 target.key 自行映射 proxy。
+  const buildProbeNativeSpec = (config) => ({
+    headers: {
+      "x-api-key": normalizeApiToken(config?.apiToken),
+      "anthropic-version": PROBE_ANTHROPIC_VERSION,
+      "anthropic-beta": PROBE_ANTHROPIC_BETA,
+      "content-type": "application/json",
+      "user-agent": PROBE_USER_AGENT,
+      "x-app": "cli",
+    },
+    body: buildProbeBody(PROBE_TARGET_MODEL),
+    path: PROBE_PATH,
+    urlSuffix: "?beta=true",
+    timeoutMs: PROBE_TIMEOUT_MS,
+    targets: PROBE_TARGETS.map((t) => ({ key: t.key, name: t.name, baseUrl: t.baseUrl })),
+  });
+
+  // 把各线路探测结果聚合成总判定（native / fetch 两路共用）。
+  // 口径「任一线路成功即成功」：成功取最快时延；全失败取最慢时延 + 一条示例错误。
+  const aggregateProbeTargets = (results) => {
+    const list = Array.isArray(results) ? results : [];
+    const succeeded = list.filter((r) => r && r.success);
+    const anySuccess = succeeded.length > 0;
+    const latencyMs = anySuccess
+      ? Math.min(...succeeded.map((r) => Number(r.latencyMs) || 0))
+      : list.reduce((max, r) => Math.max(max, Number(r?.latencyMs) || 0), 0);
+    let errorMessage = "";
+    if (!anySuccess) {
+      const sample = list.find((r) => r?.errorMessage)?.errorMessage || "未知错误";
+      errorMessage = `两条线路均失败（示例：${sample}）`;
+    }
+    return { success: anySuccess, latencyMs, errorMessage, targets: list };
+  };
 
   // 根据聚合探测的连续失败次数挑选刷新周期：
   //   连续失败 ≥ 40 次 → null（停自动探测，等手动刷新）
@@ -297,16 +338,20 @@
     CONFIG_KEY,
     DEFAULT_REFRESH_MINUTES,
     GIVE_UP_FAILURE_COUNT,
+    NATIVE_HOST_NAME,
     PROBE_BASE_URL,
     PROBE_TARGET_MODEL,
     PROBE_PATH,
     PROBE_TARGETS,
     PROBE_TIMEOUT_MS,
+    PROBE_USER_AGENT,
     SNAPSHOT_KEY,
+    aggregateProbeTargets,
     buildBillingHeaders,
     buildBillingUsageUrl,
     buildProbeBody,
     buildProbeHeaders,
+    buildProbeNativeSpec,
     buildProbeUrl,
     computeHealth,
     extractUsed,

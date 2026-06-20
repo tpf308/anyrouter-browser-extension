@@ -305,6 +305,8 @@ const mergeProbeState = (prev, probeResult, source) => {
     // 各线路子状态：本轮未探测时原样带过上次的，供面板继续展示
     targets: Array.isArray(prev?.targets) ? prev.targets : [],
     source: null,
+    // 本轮探测走的通道：native（本地 host）/ fetch（浏览器）。未探则保留上次的。
+    probeVia: prev?.probeVia || null,
   };
 
   if (!probeResult) return base;
@@ -313,6 +315,7 @@ const mergeProbeState = (prev, probeResult, source) => {
   base.lastCheckedAt = now;
   base.latencyMs = Number(probeResult.latencyMs) || 0;
   base.source = source === "manual" ? "manual" : "auto";
+  base.probeVia = probeResult.probeVia === "native" ? "native" : "fetch";
 
   // 按 key 把上次子状态与本轮各线路结果合并
   const prevByKey = {};
@@ -439,22 +442,53 @@ const probeAi = async (config) => {
     })
   );
 
-  const succeeded = results.filter((r) => r.success);
-  const anySuccess = succeeded.length > 0;
-
-  // 聚合时延：有成功线路取最快的；全失败取最慢的（更能反映卡顿时长）
-  const latencyMs = anySuccess
-    ? Math.min(...succeeded.map((r) => r.latencyMs))
-    : results.reduce((max, r) => Math.max(max, r.latencyMs), 0);
-
-  let errorMessage = "";
-  if (!anySuccess) {
-    const sample = results.find((r) => r.errorMessage)?.errorMessage || "未知错误";
-    errorMessage = `两条线路均失败（示例：${sample}）`;
-  }
-
-  return { success: anySuccess, latencyMs, errorMessage, targets: results };
+  return { ...UsageQuota.aggregateProbeTargets(results), probeVia: "fetch" };
 };
+
+// 本地探测：把请求规格交给原生 host（PowerShell + curl）执行。host 能带上 fetch 改不了的
+// User-Agent 等头，使请求与真实 Claude Code 一致、命中活通道——根治浏览器 fetch 的假 429。
+// host 未装 / 不可达 / 返回异常时返回 null，由调用方回退到 probeAi（fetch）。
+const probeViaNative = (config) =>
+  new Promise((resolve) => {
+    if (!UsageQuota.hasValidApiToken(config)) {
+      resolve(null);
+      return;
+    }
+    const spec = UsageQuota.buildProbeNativeSpec(config);
+    try {
+      chrome.runtime.sendNativeMessage(UsageQuota.NATIVE_HOST_NAME, spec, (resp) => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          // 未装 host / 未注册 / host 崩溃：静默回退（不当探测失败，避免误报红）
+          console.info("native probe unavailable, fallback to fetch:", err.message);
+          resolve(null);
+          return;
+        }
+        if (!resp || resp.ok !== true || !Array.isArray(resp.targets)) {
+          console.warn("native probe bad response, fallback to fetch:", resp && resp.error);
+          resolve(null);
+          return;
+        }
+        // host 只回各线路结果，聚合复用与 fetch 同一套口径
+        const targets = resp.targets.map((t) => ({
+          key: t.key,
+          name: t.name,
+          baseUrl: t.baseUrl,
+          success: Boolean(t.success),
+          latencyMs: Number(t.latencyMs) || 0,
+          errorMessage: t.errorMessage || "",
+        }));
+        resolve({ ...UsageQuota.aggregateProbeTargets(targets), probeVia: "native" });
+      });
+    } catch (e) {
+      console.info("native probe threw, fallback to fetch:", e?.message);
+      resolve(null);
+    }
+  });
+
+// 探测入口：优先本地 host（准确），不可用则回退浏览器 fetch（今日行为）。
+const probeAiPreferNative = async (config) =>
+  (await probeViaNative(config)) || (await probeAi(config));
 
 // 仅在 healthy/unknown ↔ unhealthy 之间翻转时弹通知，避免每次刷新重复打扰
 const maybeNotifyHealth = async (prevHealth, nextHealth) => {
@@ -507,7 +541,7 @@ const fetchUsage = async ({ forceProbe = false } = {}) => {
     const failedFetch = { response: { ok: false, status: 0 }, body: null };
     const [usageRes, probeResult] = await Promise.all([
       fetchJson(usageUrl, billingHeaders, controller.signal).catch(() => failedFetch),
-      probeAi(config),
+      probeAiPreferNative(config),
     ]);
 
     // 健康（探测结果）。health 顶层冗余存一份：用量失败导致 data 为空时，图标/通知仍能据此反映 AI 状态。

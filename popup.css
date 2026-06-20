@@ -433,6 +433,19 @@ body.modal-open { min-height: 180px; }
   word-break: break-word;
 }
 
+/* 探测方式提示：本地 host=绿色对勾；浏览器 fetch=灰色弱提示 */
+.probe-via {
+  margin-top: 1px;
+  padding-left: 15px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+}
+
+.probe-via[hidden] { display: none; }
+.probe-via[data-via="native"] { color: oklch(0.55 0.17 162.48); }
+
 /* ── Summary view（精简后只剩 AI 检测卡片） ──────── */
 
 #summaryView { display: grid; }
