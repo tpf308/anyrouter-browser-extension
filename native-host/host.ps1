@@ -76,6 +76,12 @@ try {
     $headerArgs += ("{0}: {1}" -f $p.Name, [string]$p.Value)
   }
 
+  # 请求体改为写临时文件、用 --data-binary "@file" 让 curl 读原始字节：
+  # 把含双引号/空格的 JSON 直接当 curl 命令行参数时，PS 5.1 不会正确转义内部双引号，
+  # 服务端会收到残缺 JSON（HTTP 400：invalid character 'm'…）。写文件彻底绕开命令行引号问题。
+  $bodyFile = [System.IO.Path]::Combine([string]$env:TEMP, ("anyrouter_probe_body_{0}.json" -f $PID))
+  [System.IO.File]::WriteAllText($bodyFile, [string]$req.body, (New-Object System.Text.UTF8Encoding($false)))
+
   $results = @()
   foreach ($t in $req.targets) {
     $proxy = if ($t.key -eq "main") { $proxyMain } else { $proxyCn }
@@ -84,7 +90,7 @@ try {
     # -w 末尾追加「换行 + 状态码 + 制表符 + curl 错误信息」，无需读 stderr 即可判定
     $curlArgs = @("-s", "--connect-timeout", "8", "--max-time", "$timeoutSec", "-X", "POST")
     $curlArgs += $headerArgs
-    $curlArgs += @("--data-binary", [string]$req.body)
+    $curlArgs += @("--data-binary", "@$bodyFile")
     if ($proxy -and $proxy.Trim() -ne "") { $curlArgs += @("--proxy", $proxy) }
     $curlArgs += @("-w", '\n%{http_code}\t%{errormsg}')
     $curlArgs += $url
@@ -132,6 +138,8 @@ try {
       errorMessage = $errMsg
     }
   }
+
+  try { Remove-Item $bodyFile -ErrorAction SilentlyContinue } catch { }
 
   $resp = [ordered]@{ ok = $true; probeVia = "native"; targets = @($results) }
   Write-Message $stdout ($resp | ConvertTo-Json -Depth 6 -Compress)

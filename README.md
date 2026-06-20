@@ -57,6 +57,10 @@ x-api-key: <API Key>
 - **卸载**：运行 `native-host/uninstall.ps1`（仅删注册表项，文件保留），扩展自动回退到浏览器 fetch。
 - 依赖系统自带的 `curl.exe`（Windows 10/11 默认就有）。
 
+### 纯本地检查（不开浏览器也能测）
+
+想完全脱离 Chrome/扩展、随手测一下两条线路通不通：双击 `native-host/check.bat`（或 `powershell -ExecutionPolicy Bypass -File check.ps1`）。它发与扩展完全一致的探测请求，直接打印每条线路 **正常/异常 + 真实原因 + 时延**，判定口径与扩展一致。Key 取值顺序：`-ApiKey` 参数 > `probe-config.json` 的 `apiKey` 字段 > 运行时输入。
+
 ## 产品口径
 
 - **图标数字**：展示已使用额度（USD）。数字压缩规则：`12.4` ≈ `$12.40`，`1.2k` ≈ `$1,200`，`<1` 表示不足 `$1`。
@@ -83,7 +87,7 @@ usage.js        接口 URL、鉴权头、余额换算与健康状态计算、本
 popup.html      弹窗结构
 popup.css       弹窗视觉样式
 popup.js        配置弹窗、刷新和渲染逻辑
-native-host/    可选本地探测 host（host.ps1 / host.bat / install.ps1 / uninstall.ps1）
+native-host/    可选本地探测 host（host.ps1 / host.bat / install.ps1 / uninstall.ps1）+ 纯本地检查 check.bat / check.ps1
 README.md       使用说明
 ```
 

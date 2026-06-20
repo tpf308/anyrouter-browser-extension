@@ -1,3 +1,6 @@
 # 本地探测 host 安装时生成的机器相关文件（含本机绝对路径 / 代理设置），不入库
 native-host/com.anyrouter.probe.json
 native-host/probe-config.json
+
+# 一次性排障脚本（含硬编码本机路径），不入库
+native-host/diag.ps1

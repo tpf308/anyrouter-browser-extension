@@ -527,7 +527,6 @@ const fetchUsage = async ({ forceProbe = false } = {}) => {
     return setSnapshot({
       state: "unconfigured",
       updatedAt: null,
-      errorMessage: "请配置 API Key",
     });
   }
 
