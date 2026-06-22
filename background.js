@@ -269,6 +269,8 @@ const clearNotification = (id) =>
 const mergeOne = (prevSub, res, now) => {
   const sub = {
     key: res.key,
+    groupKey: res.groupKey || "",
+    groupName: res.groupName || "",
     name: res.name,
     baseUrl: res.baseUrl,
     lastCheckedAt: now,
@@ -291,8 +293,8 @@ const mergeOne = (prevSub, res, now) => {
   return sub;
 };
 
-// 把本次 probe 结果累加到上次 probeState 上：聚合字段（驱动徽标/通知/重试）+ 各线路子状态 targets[]。
-// 聚合口径「任一线路成功即成功」：成功清零顶层连续失败，全失败才累加——故红色徽标/通知只在两条都挂时触发。
+// 把本次 probe 结果累加到上次 probeState 上：聚合字段（驱动徽标/通知/重试）+ 各入口子状态 targets[]。
+// 聚合口径：同一模型组内任一入口成功即组成功；所有模型组都成功才清零顶层连续失败。
 // probeResult === null 表示本轮没探，保留旧状态。
 const mergeProbeState = (prev, probeResult, source) => {
   const base = {
@@ -339,14 +341,20 @@ const mergeProbeState = (prev, probeResult, source) => {
   return base;
 };
 
-// 探测单个模型：发一个最小请求到该线路的 /v1/messages，判断该模型是否真的在响应。
-const probeModel = async (config, target, model) => {
-  const url = UsageQuota.buildProbeUrl(target.baseUrl);
-  const headers = UsageQuota.buildProbeHeaders(config);
-  const body = UsageQuota.buildProbeBody(model);
+const compactErrorText = (raw) => {
+  const text = String(raw || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const highDemand = text.match(/We're currently experiencing high\s*demand[^.]*\./i);
+  return (highDemand ? highDemand[0] : text).slice(0, 120);
+};
 
+const buildOpenAiResponsesUrl = (baseUrl) =>
+  `${String(baseUrl || "").replace(/\/+$/, "")}/responses`;
+
+// 探测单个入口：发最小请求，2xx 且响应体无 error/high-demand 文案才判可用。
+const probeHttpRequest = async ({ url, headers, body, timeoutMs }) => {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), UsageQuota.PROBE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = Date.now();
 
   try {
@@ -359,7 +367,7 @@ const probeModel = async (config, target, model) => {
     });
     const latencyMs = Date.now() - startedAt;
 
-    // 先读文本再尝试解析，便于在非 2xx 时把响应体原文带进错误信息（如 400「模型名不被接受」）
+    // 先读文本再尝试解析，便于在非 2xx 时把响应体原文带进错误信息。
     const raw = await response.text().catch(() => "");
     let payload = null;
     try {
@@ -368,29 +376,32 @@ const probeModel = async (config, target, model) => {
       payload = null;
     }
 
-    // ① 响应体是 JSON 错误：new-api 把「上游不可用」包成 {"type":"error","error":{message}}，
-    //    且常以 429（甚至 200）返回——这恰是「opus 实测用不了」的信号，优先级高于状态码。
-    //    （实测主站/直连不可用时即回 429 + {"message":"Service Unavailable"}；429 绝不能当「可用」。）
     const jsonErr =
-      typeof payload?.error === "string" ? payload.error : payload?.error?.message;
+      typeof payload?.error === "string"
+        ? payload.error
+        : payload?.error?.message || (!response.ok ? payload?.message : "");
     if (jsonErr) {
       return { success: false, latencyMs, errorMessage: `HTTP ${response.status}：${jsonErr}` };
     }
 
-    // ② 非 2xx 且无法解析出错误详情：带状态码与响应体片段报失败（从严）。
+    if (/high\s*demand/i.test(raw)) {
+      return {
+        success: false,
+        latencyMs,
+        errorMessage: `HTTP ${response.status}：${compactErrorText(raw) || "high demand"}`,
+      };
+    }
+
+    if (/"type"\s*:\s*"error"/.test(raw)) {
+      return { success: false, latencyMs, errorMessage: "上游在响应中返回 error 事件" };
+    }
+
     if (!response.ok) {
-      const detail = raw.slice(0, 120).trim();
+      const detail = compactErrorText(raw);
       const msg = detail ? `HTTP ${response.status}：${detail}` : `HTTP ${response.status}`;
       return { success: false, latencyMs, errorMessage: msg };
     }
 
-    // ③ 探测用 stream:true，2xx 的正常响应体是 SSE 流。若流里夹了 error 事件
-    //    （活通道先回 200、上游随后挂掉），也判失败——成功的 "hi" 回复不会含此 JSON 片段。
-    if (/"type"\s*:\s*"error"/.test(raw)) {
-      return { success: false, latencyMs, errorMessage: "上游在流中返回 error 事件" };
-    }
-
-    // ④ 2xx 且全程无 error → 活通道真的在吐 opus-4-8，可用。
     return { success: true, latencyMs, errorMessage: "" };
   } catch (error) {
     const latencyMs = Date.now() - startedAt;
@@ -399,7 +410,7 @@ const probeModel = async (config, target, model) => {
       success: false,
       latencyMs,
       errorMessage: isTimeout
-        ? `探测超时（>${Math.round(UsageQuota.PROBE_TIMEOUT_MS / 1000)}s）`
+        ? `探测超时（>${Math.round(timeoutMs / 1000)}s）`
         : error?.message || "网络错误",
     };
   } finally {
@@ -407,10 +418,43 @@ const probeModel = async (config, target, model) => {
   }
 };
 
-// 主动探测：对所有线路（主站 + 大陆直连）并发探测，判断 AI 模型是否真的在响应。
-// 聚合口径：任一线路成功即视为成功；仅当全部线路失败才算失败（驱动徽标/通知/重试）。
+const normalizeProbeTargetResult = (target, result) => ({
+  key: target.key,
+  groupKey: target.groupKey || "",
+  groupName: target.groupName || "",
+  name: target.name,
+  baseUrl: target.baseUrl,
+  success: Boolean(result.success),
+  latencyMs: Number(result.latencyMs) || 0,
+  errorMessage: result.errorMessage || "",
+});
+
+const probeClaudeTarget = async (config, target) =>
+  normalizeProbeTargetResult(
+    target,
+    await probeHttpRequest({
+      url: UsageQuota.buildProbeUrl(target.baseUrl),
+      headers: UsageQuota.buildProbeHeaders(config),
+      body: UsageQuota.buildProbeBody(UsageQuota.PROBE_TARGET_MODEL),
+      timeoutMs: UsageQuota.PROBE_TIMEOUT_MS,
+    })
+  );
+
+const probeGptTarget = async (config, target) =>
+  normalizeProbeTargetResult(
+    target,
+    await probeHttpRequest({
+      url: buildOpenAiResponsesUrl(target.baseUrl),
+      headers: UsageQuota.buildOpenAiProbeHeaders(config),
+      body: UsageQuota.buildOpenAiProbeBody(UsageQuota.GPT_PROBE_TARGET_MODEL),
+      timeoutMs: UsageQuota.PROBE_TIMEOUT_MS,
+    })
+  );
+
+// 主动探测：Claude 与 GPT 5.5 各自检测主站 + 大陆直连。
+// 聚合口径：每个模型组至少一个入口成功才算整体可用；单个入口失败显示紫色部分异常。
 const probeAi = async (config) => {
-  const targets = UsageQuota.PROBE_TARGETS;
+  const targets = [...UsageQuota.PROBE_TARGETS, ...UsageQuota.GPT_PROBE_TARGETS];
 
   if (!UsageQuota.hasValidApiToken(config)) {
     return {
@@ -419,6 +463,8 @@ const probeAi = async (config) => {
       errorMessage: "缺少 API Key",
       targets: targets.map((t) => ({
         key: t.key,
+        groupKey: t.groupKey || "",
+        groupName: t.groupName || "",
         name: t.name,
         baseUrl: t.baseUrl,
         success: false,
@@ -429,37 +475,25 @@ const probeAi = async (config) => {
   }
 
   const results = await Promise.all(
-    targets.map(async (t) => {
-      const r = await probeModel(config, t, UsageQuota.PROBE_TARGET_MODEL);
-      return {
-        key: t.key,
-        name: t.name,
-        baseUrl: t.baseUrl,
-        success: Boolean(r.success),
-        latencyMs: Number(r.latencyMs) || 0,
-        errorMessage: r.errorMessage || "",
-      };
-    })
+    [
+      ...UsageQuota.PROBE_TARGETS.map((t) => probeClaudeTarget(config, t)),
+      ...UsageQuota.GPT_PROBE_TARGETS.map((t) => probeGptTarget(config, t)),
+    ]
   );
 
   return { ...UsageQuota.aggregateProbeTargets(results), probeVia: "fetch" };
 };
 
-// 本地探测：把请求规格交给原生 host（PowerShell + curl）执行。host 能带上 fetch 改不了的
-// User-Agent 等头，使请求与真实 Claude Code 一致、命中活通道——根治浏览器 fetch 的假 429。
-// host 未装 / 不可达 / 返回异常时返回 null，由调用方回退到 probeAi（fetch）。
-const probeViaNative = (config) =>
+const sendNativeProbeSpec = (spec) =>
   new Promise((resolve) => {
-    if (!UsageQuota.hasValidApiToken(config)) {
-      resolve(null);
-      return;
+    const metaByKey = {};
+    for (const target of Array.isArray(spec?.targets) ? spec.targets : []) {
+      metaByKey[target.key] = target;
     }
-    const spec = UsageQuota.buildProbeNativeSpec(config);
     try {
       chrome.runtime.sendNativeMessage(UsageQuota.NATIVE_HOST_NAME, spec, (resp) => {
         const err = chrome.runtime.lastError;
         if (err) {
-          // 未装 host / 未注册 / host 崩溃：静默回退（不当探测失败，避免误报红）
           console.info("native probe unavailable, fallback to fetch:", err.message);
           resolve(null);
           return;
@@ -469,22 +503,42 @@ const probeViaNative = (config) =>
           resolve(null);
           return;
         }
-        // host 只回各线路结果，聚合复用与 fetch 同一套口径
-        const targets = resp.targets.map((t) => ({
-          key: t.key,
-          name: t.name,
-          baseUrl: t.baseUrl,
-          success: Boolean(t.success),
-          latencyMs: Number(t.latencyMs) || 0,
-          errorMessage: t.errorMessage || "",
-        }));
-        resolve({ ...UsageQuota.aggregateProbeTargets(targets), probeVia: "native" });
+        resolve(
+          resp.targets.map((t) => {
+            const meta = metaByKey[t.key] || {};
+            return {
+              key: t.key,
+              groupKey: meta.groupKey || t.groupKey || "",
+              groupName: meta.groupName || t.groupName || "",
+              name: meta.name || t.name,
+              baseUrl: meta.baseUrl || t.baseUrl,
+              success: Boolean(t.success),
+              latencyMs: Number(t.latencyMs) || 0,
+              errorMessage: t.errorMessage || "",
+            };
+          })
+        );
       });
     } catch (e) {
       console.info("native probe threw, fallback to fetch:", e?.message);
       resolve(null);
     }
   });
+
+// 本地探测：把请求规格交给原生 host（PowerShell + curl）执行。host 能带上 fetch 改不了的
+// User-Agent 等头，使请求与真实 Claude Code 一致、命中活通道——根治浏览器 fetch 的假 429。
+// host 未装 / 不可达 / 返回异常时返回 null，由调用方回退到 probeAi（fetch）。
+const probeViaNative = async (config) => {
+  if (!UsageQuota.hasValidApiToken(config)) return null;
+
+  const [claudeTargets, gptTargets] = await Promise.all([
+    sendNativeProbeSpec(UsageQuota.buildProbeNativeSpec(config)),
+    sendNativeProbeSpec(UsageQuota.buildOpenAiProbeNativeSpec(config)),
+  ]);
+  if (!claudeTargets || !gptTargets) return null;
+
+  return { ...UsageQuota.aggregateProbeTargets([...claudeTargets, ...gptTargets]), probeVia: "native" };
+};
 
 // 探测入口：优先本地 host（准确），不可用则回退浏览器 fetch（今日行为）。
 const probeAiPreferNative = async (config) =>
@@ -516,7 +570,7 @@ const maybeNotifyHealth = async (prevHealth, nextHealth) => {
   }
 };
 
-// 每个刷新周期：并发拉取已使用额度（计费 usage 接口）与两条线路的 opus 探测。
+// 每个刷新周期：并发拉取已使用额度（计费 usage 接口）与 AI 健康探测。
 // 用量只需 API Key（Bearer）；探测用 x-api-key。两者用同一个 API Key。
 const fetchUsage = async ({ forceProbe = false } = {}) => {
   const config = await getConfig();

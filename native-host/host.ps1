@@ -84,7 +84,8 @@ try {
 
   $results = @()
   foreach ($t in $req.targets) {
-    $proxy = if ($t.key -eq "main") { $proxyMain } else { $proxyCn }
+    $key = [string]$t.key
+    $proxy = if ($key -eq "main" -or $key.EndsWith("-main")) { $proxyMain } else { $proxyCn }
     $url = [string]$t.baseUrl + [string]$req.path + [string]$req.urlSuffix
 
     # -w 末尾追加「换行 + 状态码 + 制表符 + curl 错误信息」，无需读 stderr 即可判定
@@ -117,6 +118,12 @@ try {
     $errMsg = ""
     if ($code -eq 0) {
       $errMsg = if ($curlErr) { "无响应：$curlErr" } else { "无响应（连接失败或超时）" }
+    } elseif ($body -match 'high\s*demand') {
+      $snippet = ($body -replace '\s+', ' ').Trim()
+      $mm = [regex]::Match($snippet, "currently experiencing high\s*demand[^.]*\.", "IgnoreCase")
+      if ($mm.Success) { $snippet = $mm.Value }
+      if ($snippet.Length -gt 120) { $snippet = $snippet.Substring(0, 120) }
+      $errMsg = "HTTP ${code}：$snippet"
     } elseif ($body -match '"type"\s*:\s*"error"' -or $body -match '"error"\s*:\s*\{') {
       $mm = [regex]::Match($body, '"message"\s*:\s*"([^"]*)"')
       $detail = if ($mm.Success) { $mm.Groups[1].Value } else { "上游返回 error" }

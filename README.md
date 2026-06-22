@@ -3,9 +3,9 @@
 一个零依赖的 Chrome MV3 插件，**专注做两件事**：
 
 1. **工具栏图标显示 AnyRouter 已使用额度**（令牌为无限额度时拿不到剩余余额，故展示已用）；
-2. **主动探测 `claude-opus-4-8` 健康状态**（主站 + 大陆直连双线路），并在弹窗里逐条展示。
+2. **主动探测 `claude-opus-4-8` 与 `gpt-5.5` 健康状态**（主站 + 大陆直连），并在弹窗里逐条展示。
 
-只需一个 API Key（`sk-xxx`）即可——用量查询与 opus 探测共用它，**不再需要用户 ID 或 Access Token**。
+只需一个 API Key（`sk-xxx`）即可——用量查询、Claude 探测与 GPT 5.5 探测共用它，**不再需要用户 ID 或 Access Token**。
 
 ## 调用的接口
 
@@ -26,20 +26,26 @@ Authorization: Bearer <API Key>
 ## 运行状况探测（AI 健康检测）
 
 为识别「网站界面正常、但 AI 模型已崩溃」的情况，插件主动发最小推理请求，判断模型是否真的在响应。
-插件**同时探测两条线路**，并在弹窗的健康卡片中逐条展示各自的可用性、耗时与最近成功时间：
+插件**同时探测两个模型组、四个入口**，并在弹窗的健康卡片中逐条展示各自的可用性、耗时与最近成功时间：
 
 ```
 POST https://anyrouter.top/v1/messages                       ← 主站
 POST https://a-ocnfniawgw.cn-shanghai.fcapp.run/v1/messages   ← 大陆直连
 x-api-key: <API Key>
-{ "model": "claude-opus-4-8", "max_tokens": 1, "messages": [{ "role": "user", "content": "hi" }] }
+{ "model": "claude-opus-4-8", "max_tokens": 16, "messages": [{ "role": "user", "content": "hi" }] }
+
+POST https://anyrouter.top/v1/responses                       ← GPT 5.5 主站
+POST https://a-ocnfniawgw.cn-shanghai.fcapp.run/v1/responses   ← GPT 5.5 大陆直连
+Authorization: Bearer <API Key>
+{ "model": "gpt-5.5", "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "Reply OK only." }] }], "store": false, "stream": true, "include": ["reasoning.encrypted_content"], "prompt_cache_key": "<uuid>" }
 ```
 
 - 两条线路是同一服务的不同入口：**主站** `anyrouter.top` 与**大陆网络优化直连** `a-ocnfniawgw.cn-shanghai.fcapp.run`。
-- **探测模型固定为 `claude-opus-4-8`**（即你实际使用的模型）：早期版本用轻量的 `claude-haiku-4-5` 探测，遇到 opus 不可用但 haiku 仍能响应时会误报「正常」；现在自动与手动探测都用 opus，探测结果与你的真实可用性一致。每次探测为 `max_tokens:1` 的最小请求，单次开销极小，但会以 opus 计入你的使用日志。
-- **告警口径（三档）**：仅当**两条线路都探测失败**时，才把工具栏徽标染红「AI!」并弹系统通知；**仅一条线路异常**（另一条仍可用）时，徽标显示**紫色「AI」**作温和提示、不弹通知；两条都正常则徽标回到余额数字。只要任一条能通即视为 AI 可用。任一线路恢复后徽标会随下次探测（≤5 分钟，或手动刷新立即）自动复位，不再卡红。弹窗里两条线路始终各自独立显示状态（绿色正常 / 红色异常 / 灰色未检测）。
-- **刷新间隔内置固定为 5 分钟**：配了 API Key 后两条线路即随余额每 5 分钟定时探测（双线路均失败会以 3 分钟密集重试并弹系统通知，恢复后自动复位；连续约 2 小时仍失败则停自动探测、等手动刷新）。顶栏「自动」开关可关闭这套后台周期探测，关闭后仅在点刷新按钮时探测。
-- **点击弹窗右上角刷新按钮可强制立即探测两条线路一次**（无需等待 5 分钟周期）。
+- **探测模型固定为 `claude-opus-4-8`**（即你实际使用的模型）：早期版本用轻量的 `claude-haiku-4-5` 探测，遇到 opus 不可用但 haiku 仍能响应时会误报「正常」；现在自动与手动探测都用 opus，探测结果与你的真实可用性一致。每次探测为 `max_tokens:16` 的小请求，单次开销很低，但会以 opus 计入你的使用日志。
+- **GPT 5.5 探测固定走 Responses API**：与当前 Codex 配置的 `wire_api = "responses"` 一致，主站 `https://anyrouter.top/v1` 与大陆直连 `https://a-ocnfniawgw.cn-shanghai.fcapp.run/v1` 都会检测。请求体使用实测可通过 AnyRouter 校验的 Codex Responses 形态（结构化 `input`、`include:["reasoning.encrypted_content"]`、随机 `prompt_cache_key`）；响应体包含 `We're currently experiencing high demand...` 时直接判异常并显示原文。
+- **告警口径（三档）**：每个模型组内任一入口成功即视为该模型可用；仅当 **Claude 或 GPT 5.5 某个模型组的两个入口都失败**时，才把工具栏徽标染红「AI!」并弹系统通知。若只是某个入口失败、同组另一入口仍可用，徽标显示**紫色「AI」**作温和提示、不弹通知；全部入口正常则徽标回到余额数字。
+- **刷新间隔内置固定为 5 分钟**：配了 API Key 后四个入口即随余额每 5 分钟定时探测（任一模型组双入口均失败会以 3 分钟密集重试并弹系统通知，恢复后自动复位；连续约 2 小时仍失败则停自动探测、等手动刷新）。顶栏「自动」开关可关闭这套后台周期探测，关闭后仅在点刷新按钮时探测。
+- **点击弹窗右上角刷新按钮可强制立即探测四个入口一次**（无需等待 5 分钟周期）。
 
 ## 本地探测（可选，根治浏览器 fetch 的假 429）
 
@@ -59,13 +65,13 @@ x-api-key: <API Key>
 
 ### 纯本地检查（不开浏览器也能测）
 
-想完全脱离 Chrome/扩展、随手测一下两条线路通不通：双击 `native-host/check.bat`（或 `powershell -ExecutionPolicy Bypass -File check.ps1`）。它发与扩展完全一致的探测请求，直接打印每条线路 **正常/异常 + 真实原因 + 时延**，判定口径与扩展一致。Key 取值顺序：`-ApiKey` 参数 > `probe-config.json` 的 `apiKey` 字段 > 运行时输入。
+想完全脱离 Chrome/扩展、随手测一下 Claude 与 GPT 5.5 的四个入口通不通：双击 `native-host/check.bat`（或 `powershell -ExecutionPolicy Bypass -File check.ps1`）。它发与扩展完全一致的探测请求，直接打印每个入口 **正常/异常 + 真实原因 + 时延**，判定口径与扩展一致。Key 取值顺序：`-ApiKey` 参数 > `probe-config.json` 的 `apiKey` 字段 > 运行时输入。
 
 ## 产品口径
 
 - **图标数字**：展示已使用额度（USD）。数字压缩规则：`12.4` ≈ `$12.40`，`1.2k` ≈ `$1,200`，`<1` 表示不足 `$1`。
-- **图标颜色**：完全由 AI 健康决定——**红色「AI!」**＝两条线路都失败、**紫色「AI」**＝单条线路异常、AI 正常为绿色；灰色＝未配置。
-- **弹窗内容**：只展示两条线路的 opus 检测卡片（状态 / 耗时 / 最近成功时间）。已使用额度仅显示在工具栏图标上。
+- **图标颜色**：完全由 AI 健康决定——**红色「AI!」**＝某个模型组双入口都失败、**紫色「AI」**＝单个入口异常但同组仍有入口可用、AI 正常为绿色；灰色＝未配置。
+- **弹窗内容**：只展示 Claude 与 GPT 5.5 各入口的检测卡片（状态 / 耗时 / 最近成功时间）。已使用额度仅显示在工具栏图标上。
 
 ## 安装使用
 
@@ -74,9 +80,9 @@ x-api-key: <API Key>
 3. 点击「加载已解压的扩展程序」。
 4. 选择本目录（包含 `manifest.json`）。
 5. 点击工具栏插件图标 → 右上角钥匙按钮，填写 **API Key**（AnyRouter 控制台「API 令牌」里的渠道令牌 `sk-xxx`）。
-6. 点击「保存」，图标会自动刷新出余额、弹窗显示 opus 检测结果。
+6. 点击「保存」，图标会自动刷新出余额、弹窗显示 AI 检测结果。
 
-> 同一个 API Key 同时用作余额查询的 `Authorization: Bearer` 与 opus 探测的 `x-api-key`，两项功能共用一处配置。
+> 同一个 API Key 同时用作余额查询、Claude 探测与 GPT 5.5 探测，三项功能共用一处配置。
 
 ## 文件结构
 

@@ -81,7 +81,7 @@ const renderUnconfigured = (message) => {
   showAlert(message || "");
 };
 
-// 渲染 AI 健康卡片：逐条线路（主站 / 大陆直连）各一行；卡片整体 data-state 取聚合 health（两条都挂才红框）。
+// 渲染 AI 健康卡片：逐入口显示；卡片整体 data-state 取模型组聚合 health。
 // health.targets 为空（缺令牌 / 旧快照）时回退成单行聚合状态。
 const renderHealthTargets = (health) => {
   const card = el.healthCard;
@@ -226,12 +226,12 @@ el.keyModal.addEventListener("click", (e) => {
 
 el.configForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  // 单个 API Key 同时用作余额查询（Authorization: Bearer）与 opus 探测（x-api-key）
+  // 单个 API Key 同时用作余额查询与 AI 健康探测
   const apiKey = UsageQuota.normalizeApiToken(el.apiKeyInput.value);
 
   if (!apiKey) {
     el.apiKeyInput.focus();
-    showAlert("请填写 API Key（用于查询余额与检测 opus）。");
+    showAlert("请填写 API Key（用于查询余额与检测 AI）。");
     return;
   }
 

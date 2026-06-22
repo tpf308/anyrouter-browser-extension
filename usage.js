@@ -1,6 +1,7 @@
 (function (root) {
   const ANYROUTER_BASE_URL = "https://anyrouter.top";
   const PROBE_PATH = "/v1/messages";
+  const OPENAI_RESPONSES_PATH = "/responses";
   // 已使用额度来源：OpenAI 兼容计费接口（走 new-api 的 TokenAuth）。只需 API Key（Authorization: Bearer），
   // 不需要用户 ID——令牌本身即可定位用户。令牌为「无限额度」时拿不到剩余余额，故展示**已使用额度**。
   // 带宽松日期区间以兼容通用模板（CC Switch 等）的请求形态；new-api 的 GetUsage 实际忽略日期，
@@ -26,6 +27,7 @@
   // 响应体含 error 才算异常——new-api 把「上游不可用」包成 {"type":"error",...} 且常以 429 返回
   //（实测不可用时回 429 + "Service Unavailable"），故 429 不能当「可用」；其它非 2xx / 网络错亦为异常(红)。
   const PROBE_TARGET_MODEL = "claude-opus-4-8";
+  const GPT_PROBE_TARGET_MODEL = "gpt-5.5";
   const PROBE_ANTHROPIC_BETA = "context-1m-2025-08-07";
   const PROBE_MAX_TOKENS = 16;
   // 落到活通道所需的 CC 签名（实测只校验格式、不校验具体值；cc_version 用一个真实近期版本即可）
@@ -33,8 +35,12 @@
   const PROBE_CLI_SYSTEM = "You are Claude Code, Anthropic's official CLI for Claude.";
   // 探测线路清单：主站与大陆直连后端各探一次，两条结果都展示。
   const PROBE_TARGETS = [
-    { key: "main", name: "主站", baseUrl: ANYROUTER_BASE_URL }, // https://anyrouter.top
-    { key: "cn", name: "大陆直连", baseUrl: PROBE_BASE_URL }, // a-ocnfniawgw.cn-shanghai.fcapp.run
+    { key: "claude-main", groupKey: "claude", groupName: "Claude", name: "Claude 主站", baseUrl: ANYROUTER_BASE_URL }, // https://anyrouter.top
+    { key: "claude-cn", groupKey: "claude", groupName: "Claude", name: "Claude 大陆直连", baseUrl: PROBE_BASE_URL }, // a-ocnfniawgw.cn-shanghai.fcapp.run
+  ];
+  const GPT_PROBE_TARGETS = [
+    { key: "gpt-main", groupKey: "gpt55", groupName: "GPT 5.5", name: "GPT 5.5 主站", baseUrl: `${ANYROUTER_BASE_URL}/v1` },
+    { key: "gpt-cn", groupKey: "gpt55", groupName: "GPT 5.5", name: "GPT 5.5 大陆直连", baseUrl: `${PROBE_BASE_URL}/v1` },
   ];
   const PROBE_ANTHROPIC_VERSION = "2023-06-01";
   const PROBE_TIMEOUT_MS = 15000;
@@ -112,6 +118,12 @@
     Accept: "application/json",
   });
 
+  const buildOpenAiProbeHeaders = (config) => ({
+    Authorization: `Bearer ${normalizeApiToken(config?.apiToken)}`,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+  });
+
   // 生成随机 64 位 hex 作设备指纹占位（活通道只校验 metadata 格式、不校验具体值）
   const randomHex = (len) => {
     const bytes = new Uint8Array(len / 2);
@@ -140,6 +152,22 @@
       messages: [{ role: "user", content: "hi" }],
     });
 
+  const buildOpenAiProbeBody = (model) =>
+    JSON.stringify({
+      model: model || GPT_PROBE_TARGET_MODEL,
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Reply OK only." }],
+        },
+      ],
+      store: false,
+      stream: true,
+      include: ["reasoning.encrypted_content"],
+      prompt_cache_key: crypto.randomUUID(),
+    });
+
   // 本地探测请求规格：交给原生 host（PowerShell + curl）执行的「完整请求描述」。
   // 与浏览器 fetch 探测同源同签名，但额外带上 fetch 改不了的 user-agent（claude-cli）与 x-app，
   // 使请求与真实 Claude Code 一致、命中活通道。各 target 的代理由 host 本地 probe-config.json 决定，
@@ -157,24 +185,69 @@
     path: PROBE_PATH,
     urlSuffix: "?beta=true",
     timeoutMs: PROBE_TIMEOUT_MS,
-    targets: PROBE_TARGETS.map((t) => ({ key: t.key, name: t.name, baseUrl: t.baseUrl })),
+    targets: PROBE_TARGETS.map((t) => ({
+      key: t.key,
+      groupKey: t.groupKey,
+      groupName: t.groupName,
+      name: t.name,
+      baseUrl: t.baseUrl,
+    })),
   });
 
-  // 把各线路探测结果聚合成总判定（native / fetch 两路共用）。
-  // 口径「任一线路成功即成功」：成功取最快时延；全失败取最慢时延 + 一条示例错误。
+  const buildOpenAiProbeNativeSpec = (config) => ({
+    headers: {
+      authorization: `Bearer ${normalizeApiToken(config?.apiToken)}`,
+      "content-type": "application/json",
+      "user-agent": "codex-cli/0.141.0",
+    },
+    body: buildOpenAiProbeBody(GPT_PROBE_TARGET_MODEL),
+    path: OPENAI_RESPONSES_PATH,
+    urlSuffix: "",
+    timeoutMs: PROBE_TIMEOUT_MS,
+    targets: GPT_PROBE_TARGETS.map((t) => ({
+      key: t.key,
+      groupKey: t.groupKey,
+      groupName: t.groupName,
+      name: t.name,
+      baseUrl: t.baseUrl,
+    })),
+  });
+
+  // 把各入口探测结果聚合成总判定（native / fetch 两路共用）。
+  // 口径：同一模型组内任一入口成功即组成功；所有模型组都成功才算整体成功。
   const aggregateProbeTargets = (results) => {
     const list = Array.isArray(results) ? results : [];
-    const succeeded = list.filter((r) => r && r.success);
-    const anySuccess = succeeded.length > 0;
+    const groups = new Map();
+    for (const item of list) {
+      if (!item) continue;
+      const key = item.groupKey || item.key || "default";
+      const group = groups.get(key) || { key, name: item.groupName || item.name || key, items: [] };
+      group.items.push(item);
+      groups.set(key, group);
+    }
+    const groupList = Array.from(groups.values());
+    const groupResults = groupList.map((group) => {
+      const succeeded = group.items.filter((r) => r && r.success);
+      const success = succeeded.length > 0;
+      const latencyMs = success
+        ? Math.min(...succeeded.map((r) => Number(r.latencyMs) || 0))
+        : group.items.reduce((max, r) => Math.max(max, Number(r?.latencyMs) || 0), 0);
+      const sample = group.items.find((r) => r?.errorMessage)?.errorMessage || "未知错误";
+      return { key: group.key, name: group.name, success, latencyMs, errorMessage: success ? "" : sample };
+    });
+    const anySuccess = groupResults.length > 0 && groupResults.every((r) => r.success);
+    const succeeded = groupResults.filter((r) => r.success);
     const latencyMs = anySuccess
       ? Math.min(...succeeded.map((r) => Number(r.latencyMs) || 0))
-      : list.reduce((max, r) => Math.max(max, Number(r?.latencyMs) || 0), 0);
+      : groupResults.reduce((max, r) => Math.max(max, Number(r?.latencyMs) || 0), 0);
     let errorMessage = "";
     if (!anySuccess) {
-      const sample = list.find((r) => r?.errorMessage)?.errorMessage || "未知错误";
-      errorMessage = `两条线路均失败（示例：${sample}）`;
+      const failed = groupResults.find((r) => !r.success);
+      errorMessage = failed
+        ? `${failed.name} 两个入口均失败（示例：${failed.errorMessage || "未知错误"}）`
+        : "所有探测入口均失败";
     }
-    return { success: anySuccess, latencyMs, errorMessage, targets: list };
+    return { success: anySuccess, latencyMs, errorMessage, targets: list, groups: groupResults };
   };
 
   // 根据聚合探测的连续失败次数挑选刷新周期：
@@ -297,7 +370,7 @@
   };
 
   // 主动探测的健康状态：聚合 health（顶层，驱动徽标/通知/重试）+ 每条线路 health（targets[]，供面板逐条展示）。
-  // 聚合口径「任一线路成功即成功」已由后台写入 probeState 顶层字段（见 mergeProbeState）。
+  // 聚合口径已由后台写入 probeState 顶层字段（见 mergeProbeState）。
   const computeHealth = (probeState, config) => {
     const ps0 = probeState || {};
 
@@ -319,6 +392,8 @@
     // 每条线路独立 health，供面板渲染两行。isAggregate=false：单条线路失败不显示「已停止自动探测」。
     const targets = (Array.isArray(ps0.targets) ? ps0.targets : []).map((t) => ({
       key: t.key,
+      groupKey: t.groupKey,
+      groupName: t.groupName,
       name: t.name,
       host: hostOf(t.baseUrl),
       ...statusFromProbe(t, false),
@@ -341,12 +416,17 @@
     NATIVE_HOST_NAME,
     PROBE_BASE_URL,
     PROBE_TARGET_MODEL,
+    GPT_PROBE_TARGET_MODEL,
     PROBE_PATH,
     PROBE_TARGETS,
+    GPT_PROBE_TARGETS,
     PROBE_TIMEOUT_MS,
     PROBE_USER_AGENT,
     SNAPSHOT_KEY,
     aggregateProbeTargets,
+    buildOpenAiProbeBody,
+    buildOpenAiProbeHeaders,
+    buildOpenAiProbeNativeSpec,
     buildBillingHeaders,
     buildBillingUsageUrl,
     buildProbeBody,
